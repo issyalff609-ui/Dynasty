@@ -266,6 +266,7 @@ type CreateCharacter = (
   race: Race,
   lastName: string,
   age: number,
+  currentYear: number,
   usedFirstNames: Set<string>,
   namePool: NamePool
 ) => Character;
@@ -278,7 +279,8 @@ export const generateDatingMatches = (
   existingMatches: DatingProfile[],
   createCharacter: CreateCharacter,
   assignJobToCharacter: (character: Character) => JobAssignment,
-  pickDegreeForJob: (jobName: string) => Degree | null
+  pickDegreeForJob: (jobName: string) => Degree | null,
+  currentYear: number
 ): DatingProfile[] => {
   const existingIds = new Set(existingMatches.map((match) => match.id));
   const [minAge, maxAge] =
@@ -308,6 +310,7 @@ export const generateDatingMatches = (
       race,
       lastName,
       age,
+      currentYear,
       new Set<string>(),
       namePool
     );
@@ -315,6 +318,7 @@ export const generateDatingMatches = (
     const degree = pickDegreeForJob(jobListing.jobName);
     const profile: DatingProfile = {
       id: `dating-${Math.random().toString(36).slice(2, 10)}`,
+      personId: null,
       firstName,
       lastName,
       gender,

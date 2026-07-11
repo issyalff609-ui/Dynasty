@@ -15,6 +15,7 @@ import { StatBar } from "./src/components/StatBar";
 import { DATING_AGE_RANGES, type DatingAgeRange } from "./src/data/dating";
 import { CareerPanel } from "./src/screens/CareerPanel";
 import { EducationPanel } from "./src/screens/EducationPanel";
+import { APP_VERSION } from "./src/data/version";
 import {
   ACTIVITY_DEFINITIONS,
 } from "./src/data/jobs";
@@ -30,8 +31,10 @@ import {
   assignJobToCharacter,
   calculateCareerCeiling,
   calculateCVScore,
+  changeCareer,
   chooseIncomeForJob,
   choosePartTimeHourlyPayGBP,
+  endCurrentCareerRecord,
   generateFullTimeJobListings,
   generatePartTimeJobListings,
   getCareerCeilingBreakdown,
@@ -53,6 +56,7 @@ import {
   getAcademicPerformance,
   getAcademicPerformanceBandFromScore,
   getEducationStatus,
+  getSchoolOccupationLabelForAge,
   isPreUniversityEducationActive,
   getSchoolStartAge,
   getStudyAgeMultiplier,
@@ -82,6 +86,11 @@ import {
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
 import {
+  getPersonAge,
+  promoteNpcToPerson,
+  syncPersonAge,
+} from "./src/systems/person";
+import {
   buildFriendFromClassmate,
   getRelationshipLabel,
 } from "./src/systems/relationships";
@@ -108,8 +117,97 @@ import { clamp } from "./src/utils/maths";
 import { convertLocalToGBP, formatMoney } from "./src/utils/money";
 import { randomInt } from "./src/utils/random";
 
+const hydrateClassmate = (classmate: Classmate): Classmate => {
+  const personId = classmate.personId ?? null;
+  const gender = classmate.gender ?? null;
 
-const hydrateCharacter = (character: Character): Character => {
+  if (classmate.personId === personId && classmate.gender === gender) {
+    return classmate;
+  }
+
+  return {
+    ...classmate,
+    personId,
+    gender,
+  };
+};
+
+const hydrateFriend = (friend: Friend): Friend => {
+  const personId = friend.personId ?? null;
+  const gender = friend.gender ?? null;
+
+  if (friend.personId === personId && friend.gender === gender) {
+    return friend;
+  }
+
+  return {
+    ...friend,
+    personId,
+    gender,
+  };
+};
+
+const hydrateDatingProfile = (profile: DatingProfile): DatingProfile => {
+  const personId = profile.personId ?? null;
+
+  if (profile.personId === personId) {
+    return profile;
+  }
+
+  return {
+    ...profile,
+    personId,
+  };
+};
+
+const hydrateClassmates = (classmates: Classmate[]) => {
+  let changed = false;
+  const nextClassmates = classmates.map((classmate) => {
+    const hydratedClassmate = hydrateClassmate(classmate);
+    if (hydratedClassmate !== classmate) {
+      changed = true;
+    }
+    return hydratedClassmate;
+  });
+
+  return changed ? nextClassmates : classmates;
+};
+
+const hydrateFriends = (friends: Friend[]) => {
+  let changed = false;
+  const nextFriends = friends.map((friend) => {
+    const hydratedFriend = hydrateFriend(friend);
+    if (hydratedFriend !== friend) {
+      changed = true;
+    }
+    return hydratedFriend;
+  });
+
+  return changed ? nextFriends : friends;
+};
+
+const hydrateDatingProfiles = (profiles: DatingProfile[]) => {
+  let changed = false;
+  const nextProfiles = profiles.map((profile) => {
+    const hydratedProfile = hydrateDatingProfile(profile);
+    if (hydratedProfile !== profile) {
+      changed = true;
+    }
+    return hydratedProfile;
+  });
+
+  return changed ? nextProfiles : profiles;
+};
+
+
+const hydrateCharacter = (
+  character: Character,
+  currentYear: number
+): Character => {
+  const birthYear =
+    typeof character.birthYear === "number"
+      ? character.birthYear
+      : currentYear - character.age;
   const academicPerformanceProfile =
     character.academicPerformanceProfile ??
     buildAcademicPerformanceProfile({
@@ -131,32 +229,99 @@ const hydrateCharacter = (character: Character): Character => {
   const joinedClubs = Array.isArray(character.joinedClubs)
     ? character.joinedClubs
     : [];
+  const individualReputation =
+    typeof character.individualReputation === "number"
+      ? character.individualReputation
+      : 50;
   const classmates = Array.isArray(character.classmates)
-    ? character.classmates
+    ? hydrateClassmates(character.classmates)
     : [];
   const friends = Array.isArray(character.friends)
-    ? character.friends
+    ? hydrateFriends(character.friends)
     : [];
+  const traitHistory = Array.isArray(character.traitHistory)
+    ? character.traitHistory
+    : character.traits.map((trait) => ({
+        id: `trait-${Math.random().toString(36).slice(2, 10)}`,
+        trait,
+        change: "Gained" as const,
+        year: birthYear,
+        source: "Birth" as const,
+        reason: null,
+      }));
+  const aspirations = Array.isArray(character.aspirations)
+    ? character.aspirations
+    : [];
+  const death = character.death ?? null;
+  const skills = Array.isArray(character.skills)
+    ? character.skills
+    : [];
+  const careerHistory = Array.isArray(character.careerHistory)
+    ? character.careerHistory
+    : [];
+  const romanticRelationships = Array.isArray(character.romanticRelationships)
+    ? character.romanticRelationships
+    : [];
+  const datingMatches = Array.isArray(character.datingMatches)
+    ? hydrateDatingProfiles(character.datingMatches)
+    : [];
+  const partner = character.partner ? hydrateDatingProfile(character.partner) : null;
+  const syncedCharacter = syncPersonAge(
+    {
+      ...character,
+      birthYear,
+      individualReputation,
+      traitHistory,
+      aspirations,
+      death,
+      skills,
+      careerHistory,
+      romanticRelationships,
+      datingMatches,
+      partner,
+    },
+    currentYear
+  );
 
   if (
+    character.birthYear === birthYear &&
+    character.age === syncedCharacter.age &&
     character.academicPerformanceProfile === academicPerformanceProfile &&
     character.academicPerformanceScore === academicPerformanceScore &&
     character.studySessionsUsedThisYear === studySessionsUsedThisYear &&
     character.joinedClubs === joinedClubs &&
+    character.individualReputation === individualReputation &&
     character.classmates === classmates &&
-    character.friends === friends
+    character.friends === friends &&
+    character.traitHistory === traitHistory &&
+    character.aspirations === aspirations &&
+    character.death === death &&
+    character.skills === skills &&
+    character.careerHistory === careerHistory &&
+    character.romanticRelationships === romanticRelationships &&
+    character.datingMatches === datingMatches &&
+    character.partner === partner
   ) {
     return character;
   }
 
   return {
-    ...character,
+    ...syncedCharacter,
     academicPerformanceProfile,
     academicPerformanceScore,
     studySessionsUsedThisYear,
     joinedClubs,
+    individualReputation,
     classmates,
     friends,
+    traitHistory,
+    aspirations,
+    death,
+    skills,
+    careerHistory,
+    romanticRelationships,
+    datingMatches,
+    partner,
   };
 };
 
@@ -166,6 +331,7 @@ const createCharacter = (
   race: Race,
   lastName: string,
   age: number,
+  currentYear: number,
   usedFirstNames: Set<string>,
   namePool: NamePool
 ) =>
@@ -175,6 +341,7 @@ const createCharacter = (
     race,
     lastName,
     age,
+    currentYear,
     usedFirstNames,
     namePool,
     calculateCareerCeiling
@@ -265,7 +432,7 @@ export default function App() {
     setHousehold((currentHousehold) => {
       let changed = false;
       const characters = currentHousehold.characters.map((character) => {
-        const hydrated = hydrateCharacter(character);
+        const hydrated = hydrateCharacter(character, currentHousehold.currentYear);
         if (hydrated !== character) {
           changed = true;
         }
@@ -301,6 +468,7 @@ export default function App() {
     currentCharacter,
     household.country
   );
+  const currentCharacterAge = getPersonAge(currentCharacter, household.currentYear);
   const currentAcademicPerformance = getAcademicPerformance(currentCharacter);
   const currentCVScore = calculateCVScore(
     currentCharacter,
@@ -313,7 +481,7 @@ export default function App() {
     currentCharacter.partTimeJob?.annualSalaryGBP ?? 0
   );
   const shouldShowAcademicPerformance =
-    currentCharacter.age >= getSchoolStartAge(household.country);
+    currentCharacterAge >= getSchoolStartAge(household.country);
   const currentDatingScore = calculateDatingScore(
     currentCharacter,
     household.reputation
@@ -392,7 +560,7 @@ export default function App() {
           <View style={styles.engineeringHeader}>
             <View style={styles.detailGroup}>
               <Text style={styles.engineeringTitle}>Engineering</Text>
-              <Text>{`${currentCharacter.firstName} ${currentCharacter.lastName}  Age ${currentCharacter.age}  ${household.country}`}</Text>
+              <Text>{`${currentCharacter.firstName} ${currentCharacter.lastName}  Age ${currentCharacterAge}  ${household.country}`}</Text>
             </View>
             <Pressable
               onPress={() => setEngineeringVisible(false)}
@@ -575,7 +743,7 @@ export default function App() {
                 <Text>{`Age multiplier: x${cvScoreDebug.ageMultiplier.toFixed(2)}`}</Text>
                 <Text>{`Final CV score: ${cvScoreDebug.finalScore}/100`}</Text>
                 <Text>{`Full-time offer acceptance chance: ${(getJobOfferAcceptanceChance(currentCVScore) * 100).toFixed(1)}%`}</Text>
-                {currentCharacter.age >= 16 ? (
+                {currentCharacterAge >= 16 ? (
                   <Text>{`Part-time offer acceptance chance: ${(getPartTimeJobOfferAcceptanceChance(currentCVScore) * 100).toFixed(1)}%`}</Text>
                 ) : null}
                 {getCVScoreExplanationLines(currentCharacter, cvScoreDebug).map((line) => (
@@ -602,7 +770,7 @@ export default function App() {
                 <Text>{`Current live score: ${academicPerformanceDebug.finalScore}/100`}</Text>
                 <Text>{`Study change since birth: ${academicPerformanceDebug.scoreChangeFromStudy >= 0 ? "+" : ""}${academicPerformanceDebug.scoreChangeFromStudy}`}</Text>
                 <Text>{`Study uses this year: ${academicPerformanceDebug.studySessionsUsedThisYear}/3`}</Text>
-                <Text>{`Current study age multiplier: x${getStudyAgeMultiplier(currentCharacter.age).toFixed(2)}`}</Text>
+                <Text>{`Current study age multiplier: x${getStudyAgeMultiplier(currentCharacterAge).toFixed(2)}`}</Text>
                 {academicPerformanceDebug.entries.map((entry) => (
                   <Text key={entry.label}>{`${entry.label}: ${entry.value >= 0 ? "+" : ""}${entry.value.toFixed(2)}`}</Text>
                 ))}
@@ -825,24 +993,31 @@ export default function App() {
     setHousehold((currentHousehold) => {
       const characters = currentHousehold.characters.map((character) =>
         character.id === currentHousehold.currentCharacterId
-          ? {
-              ...character,
-              job: accepted ? listing.jobName : character.job,
-              annualIncomeGBP: accepted
-                ? listing.annualSalaryGBP
-                : character.annualIncomeGBP,
-              fullTimeJobListings: character.fullTimeJobListings.map((jobListing) =>
-                jobListing.jobName === listing.jobName
-                  ? {
-                      ...jobListing,
-                      unavailable: !accepted,
-                    }
-                  : jobListing
-              ),
-              memories: accepted
-                ? [createMemory(`Started work as ${listing.jobName}.`), ...character.memories].slice(0, 20)
-                : [createMemory(`Rejected for ${listing.jobName}.`), ...character.memories].slice(0, 20),
-            }
+          ? (() => {
+              const updatedCharacter = accepted
+                ? changeCareer(
+                    character,
+                    listing.jobName,
+                    listing.annualSalaryGBP,
+                    currentHousehold.currentYear
+                  )
+                : character;
+
+              return {
+                ...updatedCharacter,
+                fullTimeJobListings: character.fullTimeJobListings.map((jobListing) =>
+                  jobListing.jobName === listing.jobName
+                    ? {
+                        ...jobListing,
+                        unavailable: !accepted,
+                      }
+                    : jobListing
+                ),
+                memories: accepted
+                  ? [createMemory(`Started work as ${listing.jobName}.`), ...character.memories].slice(0, 20)
+                  : [createMemory(`Rejected for ${listing.jobName}.`), ...character.memories].slice(0, 20),
+              };
+            })()
           : character
       );
       const finance = recalculateHouseholdFinance(
@@ -903,7 +1078,11 @@ export default function App() {
       const characters = currentHousehold.characters.map((character) =>
         character.id === currentHousehold.currentCharacterId
           ? {
-              ...character,
+              ...endCurrentCareerRecord(
+                character,
+                currentHousehold.currentYear,
+                "Quit"
+              ),
               job: "No job",
               annualIncomeGBP: 0,
             }
@@ -998,7 +1177,7 @@ export default function App() {
   };
 
   const joinActivityClub = (activityName: string) => {
-    if (currentCharacter.age < 4) {
+    if (currentCharacterAge < 4) {
       Alert.alert("Activities", `You can join the ${activityName} club at 4`);
       return;
     }
@@ -1027,17 +1206,65 @@ export default function App() {
   };
 
   const addClassmateAsFriend = (classmate: Classmate) => {
-    updateCurrentCharacter((character) => {
-      if (character.friends.some((friend) => friend.id === classmate.id)) {
-        return character;
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter) {
+        return currentHousehold;
       }
 
+      if (currentCharacter.friends.some((friend) => friend.id === classmate.id)) {
+        return currentHousehold;
+      }
+
+      const promotion = promoteNpcToPerson(
+        {
+          personId: classmate.personId,
+          firstName: classmate.firstName,
+          lastName: classmate.lastName,
+          age: classmate.age,
+          gender: classmate.gender,
+          race: classmate.race,
+          appearance: classmate.appearance,
+          intelligence: classmate.intelligence,
+          traits: classmate.traits,
+          job: getSchoolOccupationLabelForAge(classmate.age, currentHousehold.country),
+          annualIncomeGBP: 0,
+          careerCeiling: 50,
+          degree: null,
+          universityYearsRemaining: 0,
+        },
+        currentHousehold.currentYear,
+        currentHousehold.characters
+      );
+      const promotedClassmate = {
+        ...classmate,
+        personId: promotion.person.id,
+      };
+      const nextCharacters = promotion.created
+        ? [...currentHousehold.characters, promotion.person]
+        : currentHousehold.characters;
+
       return {
-        ...character,
-        friends: [
-          ...character.friends,
-          buildFriendFromClassmate(classmate, household.country),
-        ],
+        ...currentHousehold,
+        characters: nextCharacters.map((character) =>
+          character.id === currentHousehold.currentCharacterId
+            ? {
+                ...character,
+                classmates: character.classmates.map((item) =>
+                  item.id === classmate.id ? promotedClassmate : item
+                ),
+                friends: [
+                  ...character.friends,
+                  buildFriendFromClassmate(
+                    promotedClassmate,
+                    currentHousehold.country
+                  ),
+                ],
+              }
+            : character
+        ),
       };
     });
 
@@ -1067,7 +1294,7 @@ export default function App() {
     }
 
     const baseGain = getStudyGain(currentCharacter.intelligence);
-    const ageMultiplier = getStudyAgeMultiplier(currentCharacter.age);
+    const ageMultiplier = getStudyAgeMultiplier(currentCharacterAge);
     const gain = Math.max(1, Math.round(baseGain * ageMultiplier));
 
     updateCurrentCharacter((character) => ({
@@ -1113,7 +1340,8 @@ export default function App() {
                 [],
                 createCharacter,
                 assignJobToCharacter,
-                pickDegreeForJob
+                pickDegreeForJob,
+                household.currentYear
               ),
       };
     });
@@ -1137,7 +1365,8 @@ export default function App() {
             persistentMatches,
             createCharacter,
             assignJobToCharacter,
-            pickDegreeForJob
+            pickDegreeForJob,
+            household.currentYear
           ),
         ].slice(0, persistentMatches.length + 10),
         datingRefreshesRemaining: character.datingRefreshesRemaining - 1,
@@ -1226,30 +1455,82 @@ export default function App() {
   };
 
   const askToBePartner = (matchId: string) => {
-    updateCurrentCharacter((character) => {
-      const match = character.datingMatches.find((item) => item.id === matchId);
-      if (!match) return character;
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter) {
+        return currentHousehold;
+      }
+
+      const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
+      if (!match) return currentHousehold;
       const acceptanceChance = getPartnerAcceptanceChance(match);
       const accepted = Math.random() * 100 < acceptanceChance;
       if (!accepted) {
         Alert.alert("Romance", "Rejected.");
         return {
-          ...character,
-          datingMatches: character.datingMatches.map((item) =>
-            item.id === matchId
+          ...currentHousehold,
+          characters: currentHousehold.characters.map((character) =>
+            character.id === currentHousehold.currentCharacterId
               ? {
-                  ...item,
-                  romanceScore: clamp(item.romanceScore - 10, 0, 100),
+                  ...character,
+                  datingMatches: character.datingMatches.map((item) =>
+                    item.id === matchId
+                      ? {
+                          ...item,
+                          romanceScore: clamp(item.romanceScore - 10, 0, 100),
+                        }
+                      : item
+                  ),
                 }
-              : item
+              : character
           ),
         };
       }
+
+      const promotion = promoteNpcToPerson(
+        {
+          personId: match.personId,
+          firstName: match.firstName,
+          lastName: match.lastName,
+          age: match.age,
+          gender: match.gender,
+          race: match.race,
+          appearance: match.appearance,
+          intelligence: match.intelligence,
+          traits: match.traits,
+          job: match.job,
+          annualIncomeGBP: match.annualIncomeGBP,
+          careerCeiling: match.careerCeiling,
+          degree: match.degree,
+          universityYearsRemaining: 0,
+        },
+        currentHousehold.currentYear,
+        currentHousehold.characters
+      );
+      const promotedMatch = {
+        ...match,
+        personId: promotion.person.id,
+      };
+      const nextCharacters = promotion.created
+        ? [...currentHousehold.characters, promotion.person]
+        : currentHousehold.characters;
+
       Alert.alert("Romance", "Accepted.");
       return {
-        ...character,
-        partner: match,
-        datingMatches: character.datingMatches.filter((item) => item.id !== matchId),
+        ...currentHousehold,
+        characters: nextCharacters.map((character) =>
+          character.id === currentHousehold.currentCharacterId
+            ? {
+                ...character,
+                partner: promotedMatch,
+                datingMatches: character.datingMatches.filter(
+                  (item) => item.id !== matchId
+                ),
+              }
+            : character
+        ),
       };
     });
     setSelectedDatingMatchId(null);
@@ -1269,7 +1550,7 @@ export default function App() {
         <CharacterHeader
           headerLabel={`${currentCharacter.firstName} ${currentCharacter.lastName} (you)`}
           sectionLabel="Player"
-          summary={`Age: ${currentCharacter.age}  Year: ${household.currentYear}  Country: ${household.country}  Bank Account: ${formatMoney(
+          summary={`Age: ${currentCharacterAge}  Year: ${household.currentYear}  Country: ${household.country}  Bank Account: ${formatMoney(
             currentCharacter.bankBalanceGBP,
             household.country
           )}`}
@@ -1370,7 +1651,14 @@ export default function App() {
 
         {familyVisible ? (
           <SectionCard>
-            {familyMembers.map((character) => (
+            {familyMembers.map((character) => {
+              const relationshipLabel = getRelationshipLabel(
+                character,
+                currentCharacter,
+                household.characters
+              );
+
+              return (
               <PersonCard
                 key={character.id}
                 expanded={selectedFamilyMemberId === character.id}
@@ -1379,13 +1667,14 @@ export default function App() {
                     current === character.id ? null : character.id
                   )
                 }
-                title={`${character.firstName} ${character.lastName} (${getRelationshipLabel(
-                  character,
-                  currentCharacter
-                )})`}
+                title={
+                  relationshipLabel
+                    ? `${character.firstName} ${character.lastName} (${relationshipLabel})`
+                    : `${character.firstName} ${character.lastName}`
+                }
               >
                 <View style={styles.detailGroup}>
-                  <Text>{`Age: ${character.age}`}</Text>
+                  <Text>{`Age: ${getPersonAge(character, household.currentYear)}`}</Text>
                   <Text>
                     {scoreText(
                       "Relationship",
@@ -1422,7 +1711,8 @@ export default function App() {
                   <Text>Close</Text>
                 </Pressable>
               </PersonCard>
-            ))}
+              );
+            })}
             <Pressable
               onPress={() => {
                 setSelectedFamilyMemberId(null);
@@ -1495,7 +1785,7 @@ export default function App() {
             ) : null}
             <Pressable
               onPress={() => {
-                if (currentCharacter.age < 18) {
+                if (currentCharacterAge < 18) {
                   Alert.alert("Romance", "Dating App becomes available at 18.");
                   return;
                 }
@@ -1746,14 +2036,21 @@ export default function App() {
             </Pressable>
             {houseResidentsVisible ? (
               <View style={styles.detailBox}>
-                {houseResidents.map((character) => (
+                {houseResidents.map((character) => {
+                  const relationshipLabel = getRelationshipLabel(
+                    character,
+                    currentCharacter,
+                    household.characters
+                  );
+
+                  return (
                   <Text key={character.id}>
-                    {`${character.firstName} ${character.lastName} (${getRelationshipLabel(
-                      character,
-                      currentCharacter
-                    )})`}
+                    {relationshipLabel
+                      ? `${character.firstName} ${character.lastName} (${relationshipLabel})`
+                      : `${character.firstName} ${character.lastName}`}
                   </Text>
-                ))}
+                  );
+                })}
                 <Pressable
                   onPress={() => setHouseResidentsVisible(false)}
                   style={styles.innerBox}
@@ -1930,6 +2227,10 @@ export default function App() {
       <Pressable onPress={ageUpOneYear} style={styles.ageUpButton}>
         <Text style={styles.ageUpButtonText}>Age Up</Text>
       </Pressable>
+
+      <View style={styles.versionBadge}>
+        <Text style={styles.versionText}>{`v${APP_VERSION}`}</Text>
+      </View>
 
       <Pressable
         onPress={() => {
@@ -2129,6 +2430,19 @@ const styles = StyleSheet.create({
   ageUpButtonText: {
     color: "#000000",
     textAlign: "center",
+  },
+  versionBadge: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#ffffff",
+  },
+  versionText: {
+    color: "#000000",
+    fontSize: 11,
   },
   tbcPanel: {
     position: "absolute",

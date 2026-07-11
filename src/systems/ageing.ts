@@ -6,6 +6,8 @@ import {
   chooseJobForFriend,
   generateFullTimeJobListings,
   pickDegreeForJob,
+  startCareerRecord,
+  updateCurrentCareerSalary,
 } from "../systems/careers";
 import {
   chooseDegreeForFriend,
@@ -18,6 +20,7 @@ import {
   shouldFriendGoToHigherEducation,
 } from "../systems/education";
 import { recalculateHouseholdFinance, getTaxSummary } from "../systems/finances";
+import { getPersonAge, syncPersonAge } from "../systems/person";
 import { syncFriendFromClassmate } from "../systems/relationships";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
@@ -99,12 +102,15 @@ export const ageCharacterOneYear = (
   character: Character,
   country: Country,
   isActivePlayer: boolean,
-  householdReputation: number
+  householdReputation: number,
+  currentYear: number
 ): Character => {
-  const previousEducationStatus = getEducationStatus(character, country);
-  const nextAge = character.age + 1;
+  const previousCharacter = syncPersonAge(character, currentYear);
+  const previousEducationStatus = getEducationStatus(previousCharacter, country);
+  const nextYear = currentYear + 1;
+  const nextAge = getPersonAge(character, nextYear);
   let nextCharacter: Character = {
-    ...character,
+    ...previousCharacter,
     age: nextAge,
     studySessionsUsedThisYear: 0,
   };
@@ -112,7 +118,7 @@ export const ageCharacterOneYear = (
   if ((country === "England" || country === "Spain") && nextAge === 17) {
     nextCharacter = {
       ...nextCharacter,
-      leftSchoolEarlyAt16: decideLeftSchoolAt16(character),
+      leftSchoolEarlyAt16: decideLeftSchoolAt16(previousCharacter),
     };
   }
 
@@ -229,11 +235,12 @@ export const ageCharacterOneYear = (
     nextCharacter.job === "No job"
   ) {
     const jobAssignment = assignJobToCharacter(nextCharacter);
-    nextCharacter = {
-      ...nextCharacter,
-      job: jobAssignment.jobName,
-      annualIncomeGBP: jobAssignment.incomeGBP,
-    };
+    nextCharacter = startCareerRecord(
+      nextCharacter,
+      jobAssignment.jobName,
+      jobAssignment.incomeGBP,
+      nextYear
+    );
     const degreeForJob = pickDegreeForJob(jobAssignment.jobName);
     if (degreeForJob) {
       nextCharacter = {
@@ -246,12 +253,10 @@ export const ageCharacterOneYear = (
       );
     }
   } else if (nextCharacter.annualIncomeGBP > 0) {
-    nextCharacter = {
-      ...nextCharacter,
-      annualIncomeGBP: Math.round(
-        nextCharacter.annualIncomeGBP * (1 + randomInt(0, 6) / 100)
-      ),
-    };
+    nextCharacter = updateCurrentCareerSalary(
+      nextCharacter,
+      Math.round(nextCharacter.annualIncomeGBP * (1 + randomInt(0, 6) / 100))
+    );
   }
 
   if (nextCharacter.job !== "No job" || nextCharacter.partTimeJob !== null) {
@@ -275,7 +280,8 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
       character,
       currentHousehold.country,
       character.id === currentHousehold.currentCharacterId,
-      currentHousehold.reputation
+      currentHousehold.reputation,
+      currentHousehold.currentYear
     )
   );
 

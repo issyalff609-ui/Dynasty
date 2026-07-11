@@ -1,4 +1,4 @@
-import type { Strength, Trait } from "./character";
+import type { Strength, Trait } from "./person";
 
 export type CareerBand = "Low Income" | "Mid Income" | "High Income" | "Variable";
 export type ActivityCategory = "Physical" | "Mental" | "Skill-based" | "Social";
@@ -25,6 +25,23 @@ export type JobDefinition = {
 export type JobAssignment = {
   jobName: string;
   incomeGBP: number;
+};
+
+export type CareerRecord = {
+  id: string;
+  jobTitle: string;
+  startYear: number;
+  endYear: number | null;
+  startingAnnualSalaryGBP: number;
+  endingAnnualSalaryGBP: number | null;
+  endReason:
+    | "Quit"
+    | "Changed Job"
+    | "Promoted"
+    | "Fired"
+    | "Retired"
+    | "Death"
+    | null;
 };
 
 export type FullTimeJobListing = {

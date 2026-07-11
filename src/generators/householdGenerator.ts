@@ -11,7 +11,9 @@ import type {
 import type { Degree } from "../types/education";
 import type { House, Household } from "../types/household";
 import type { JobAssignment, PartTimeJobListing } from "../types/jobs";
+import { startCareerRecord } from "../systems/careers";
 import { getInitialHouseholdReputation } from "../systems/reputation";
+import { getMarried } from "../systems/relationships";
 import { pickOne, randomInt } from "../utils/random";
 import {
   createMemory,
@@ -70,6 +72,7 @@ type CreateCharacter = (
   race: Race,
   lastName: string,
   age: number,
+  currentYear: number,
   usedFirstNames: Set<string>,
   namePool: NamePool
 ) => Character;
@@ -91,6 +94,7 @@ export const buildHousehold = ({
   generateFullTimeJobListings,
   pickDegreeForJob,
 }: BuildHouseholdDependencies): Household => {
+  const currentYear = 2025;
   const country = pickOne(COUNTRIES);
   const race = pickAppearanceRaceForCountry(country);
   const familyNamePool = pickNamePoolForCountry(country);
@@ -113,6 +117,7 @@ export const buildHousehold = ({
     race,
     lastName,
     0,
+    currentYear,
     usedFirstNames,
     familyNamePool
   );
@@ -122,6 +127,7 @@ export const buildHousehold = ({
     race,
     lastName,
     motherAge,
+    currentYear,
     usedFirstNames,
     familyNamePool
   );
@@ -131,6 +137,7 @@ export const buildHousehold = ({
     race,
     lastName,
     fatherAge,
+    currentYear,
     usedFirstNames,
     familyNamePool
   );
@@ -142,6 +149,7 @@ export const buildHousehold = ({
       race,
       lastName,
       siblingAgePool.length > 0 ? pickOne(siblingAgePool) : 1,
+      currentYear,
       usedFirstNames,
       familyNamePool
     )
@@ -155,6 +163,12 @@ export const buildHousehold = ({
     job: parentOneJob.jobName,
     annualIncomeGBP: parentOneJob.incomeGBP,
   };
+  parentOne = startCareerRecord(
+    parentOne,
+    parentOneJob.jobName,
+    parentOneJob.incomeGBP,
+    currentYear
+  );
 
   const otherParentShouldStopWorking =
     parentOneJob.incomeGBP >= 120000 && Math.random() < 0.7;
@@ -172,6 +186,12 @@ export const buildHousehold = ({
       job: parentTwoJob.jobName,
       annualIncomeGBP: parentTwoJob.incomeGBP,
     };
+    parentTwo = startCareerRecord(
+      parentTwo,
+      parentTwoJob.jobName,
+      parentTwoJob.incomeGBP,
+      currentYear
+    );
   }
 
   const parentOneDegree = pickDegreeForJob(parentOne.job);
@@ -222,7 +242,40 @@ export const buildHousehold = ({
     memories: [],
   };
 
-  const characters = [playerWithoutStartingJob, parentOne, parentTwo, ...updatedSiblings].map(
+  const childIds = [playerWithoutStartingJob.id, ...updatedSiblings.map((sibling) => sibling.id)];
+  const linkedPlayer = {
+    ...playerWithoutStartingJob,
+    motherId: parentOne.id,
+    fatherId: parentTwo.id,
+  };
+  const linkedParentOne = {
+    ...parentOne,
+    motherId: null,
+    fatherId: null,
+    childrenIds: childIds,
+  };
+  const linkedParentTwo = {
+    ...parentTwo,
+    motherId: null,
+    fatherId: null,
+    childrenIds: childIds,
+  };
+  const linkedSiblings = updatedSiblings.map((sibling) => ({
+    ...sibling,
+    motherId: parentOne.id,
+    fatherId: parentTwo.id,
+  }));
+  const oldestChildBirthYear = Math.min(
+    linkedPlayer.birthYear,
+    ...linkedSiblings.map((sibling) => sibling.birthYear)
+  );
+  const [marriedParentOne, marriedParentTwo] = getMarried(
+    linkedParentOne,
+    linkedParentTwo,
+    oldestChildBirthYear
+  );
+
+  const characters = [linkedPlayer, marriedParentOne, marriedParentTwo, ...linkedSiblings].map(
     (character) => ({
       ...character,
       fullTimeJobListings: generateFullTimeJobListings(character),
@@ -250,7 +303,7 @@ export const buildHousehold = ({
   });
 
   return {
-    currentYear: 2025,
+    currentYear,
     country,
     familyLastName: lastName,
     netWorthGBP: Math.max(

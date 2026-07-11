@@ -33,6 +33,8 @@ export const buildClassmate = (
 
   return {
     id: `classmate-${Math.random().toString(36).slice(2, 10)}`,
+    personId: null,
+    gender,
     firstName,
     lastName: classmateLastName,
     age,

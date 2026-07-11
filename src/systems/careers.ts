@@ -10,6 +10,7 @@ import { getReputationContribution } from "../systems/reputation";
 import type { Character, Country } from "../types/character";
 import type { Degree } from "../types/education";
 import type {
+  CareerRecord,
   FullTimeJobListing,
   JobAssignment,
   JobDefinition,
@@ -20,6 +21,116 @@ import type { DatingProfile, Friend } from "../types/relationships";
 import { clamp } from "../utils/maths";
 import { formatMoney } from "../utils/money";
 import { pickOne, randomInt, shuffle, weightedPick } from "../utils/random";
+
+export const getCurrentCareerRecord = (person: Character) =>
+  [...person.careerHistory]
+    .reverse()
+    .find((record) => record.endYear === null) ?? null;
+
+export const startCareerRecord = (
+  person: Character,
+  jobTitle: string,
+  salaryGBP: number,
+  currentYear: number
+): Character => {
+  if (jobTitle === "No job") {
+    return person;
+  }
+
+  const currentCareerRecord = getCurrentCareerRecord(person);
+  if (currentCareerRecord && currentCareerRecord.jobTitle === jobTitle) {
+    return {
+      ...person,
+      annualIncomeGBP: salaryGBP,
+    };
+  }
+
+  const nextRecord: CareerRecord = {
+    id: `career-${Math.random().toString(36).slice(2, 10)}`,
+    jobTitle,
+    startYear: currentYear,
+    endYear: null,
+    startingAnnualSalaryGBP: salaryGBP,
+    endingAnnualSalaryGBP: null,
+    endReason: null,
+  };
+
+  return {
+    ...person,
+    job: jobTitle,
+    annualIncomeGBP: salaryGBP,
+    careerHistory: [...person.careerHistory, nextRecord],
+  };
+};
+
+export const endCurrentCareerRecord = (
+  person: Character,
+  currentYear: number,
+  endReason: CareerRecord["endReason"]
+): Character => {
+  const currentCareerRecord = getCurrentCareerRecord(person);
+  if (!currentCareerRecord) {
+    return person;
+  }
+
+  return {
+    ...person,
+    careerHistory: person.careerHistory.map((record) =>
+      record.id === currentCareerRecord.id
+        ? {
+            ...record,
+            endYear: currentYear,
+            endingAnnualSalaryGBP: person.annualIncomeGBP,
+            endReason,
+          }
+        : record
+    ),
+  };
+};
+
+export const changeCareer = (
+  person: Character,
+  newJobTitle: string,
+  newSalaryGBP: number,
+  currentYear: number
+): Character => {
+  const currentCareerRecord = getCurrentCareerRecord(person);
+  if (!currentCareerRecord) {
+    return startCareerRecord(person, newJobTitle, newSalaryGBP, currentYear);
+  }
+
+  if (currentCareerRecord.jobTitle === newJobTitle) {
+    return {
+      ...person,
+      annualIncomeGBP: newSalaryGBP,
+    };
+  }
+
+  const withEndedCareer = endCurrentCareerRecord(
+    person,
+    currentYear,
+    "Changed Job"
+  );
+
+  return startCareerRecord(
+    {
+      ...withEndedCareer,
+      job: "No job",
+      annualIncomeGBP: 0,
+    },
+    newJobTitle,
+    newSalaryGBP,
+    currentYear
+  );
+};
+
+export const updateCurrentCareerSalary = (
+  person: Character,
+  newSalaryGBP: number
+): Character => ({
+  ...person,
+  annualIncomeGBP: newSalaryGBP,
+});
 
 export const getPartTimeHoursBounds = (band: PartTimeHoursBand) =>
   PART_TIME_HOURS_BANDS.find((item) => item.label === band) ?? PART_TIME_HOURS_BANDS[0];
