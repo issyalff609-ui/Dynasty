@@ -16,6 +16,7 @@ import type {
 } from "../types/character";
 import type { Memory } from "../types/relationships";
 import { buildAcademicPerformanceProfile } from "../systems/education";
+import { getDefaultRelationshipPreferences } from "../systems/person";
 import { pickUpToTwo, randomInt, shuffle, weightedPick } from "../utils/random";
 
 export const pickAppearanceRaceForCountry = (country: Country) =>
@@ -36,9 +37,13 @@ export const pickUniqueFirstName = (
   return chosenName;
 };
 
-export const createMemory = (text: string): Memory => ({
+export const createMemory = (
+  text: string,
+  metadata: Omit<Partial<Memory>, "id" | "text"> = {}
+): Memory => ({
   id: `memory-${Math.random().toString(36).slice(2, 10)}`,
   text,
+  ...metadata,
 });
 
 type CalculateCareerCeiling = (
@@ -59,6 +64,7 @@ export const createCharacter = (
   namePool: NamePool,
   calculateCareerCeiling: CalculateCareerCeiling
 ): Character => {
+  const id = `${role.toLowerCase()}-${Math.random().toString(36).slice(2, 9)}`;
   const mood = randomInt(40, 90);
   const health = randomInt(40, 90);
   const appearance = randomInt(1, 100);
@@ -82,7 +88,7 @@ export const createCharacter = (
   });
 
   return {
-    id: `${role.toLowerCase()}-${Math.random().toString(36).slice(2, 9)}`,
+    id,
     firstName: pickUniqueFirstName(usedFirstNames, namePool, gender),
     lastName,
     birthYear: currentYear - age,
@@ -140,5 +146,11 @@ export const createCharacter = (
     friends: [],
     relationshipScores: {},
     memories: [],
+    diary: [],
+    relationshipPreferences: getDefaultRelationshipPreferences({
+      id,
+      birthYear: currentYear - age,
+    }),
+    recentRelationshipLifeEvents: [],
   };
 };

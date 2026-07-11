@@ -108,6 +108,54 @@ export type DeathRecord = {
   cause: string;
 };
 
+export type DiaryEntryCategory =
+  | "relationship"
+  | "family"
+  | "career"
+  | "education"
+  | "health"
+  | "personal"
+  | "general";
+
+export type DiaryEntry = {
+  id: string;
+  year: number;
+  text: string;
+  category: DiaryEntryCategory | null;
+};
+
+export type RelationshipDisposition =
+  | "wants"
+  | "open"
+  | "unsure"
+  | "does_not_want";
+
+export type ExBoundaryPreference = "comfortable" | "not_comfortable";
+
+export type RelationshipStylePreference = "closed" | "open";
+
+export type RelationshipPreferences = {
+  childrenDisposition: RelationshipDisposition;
+  marriageDisposition: RelationshipDisposition;
+  movingInDisposition: RelationshipDisposition;
+  exBoundaryPreference: ExBoundaryPreference;
+  relationshipStylePreference: RelationshipStylePreference;
+};
+
+export type RecentRelationshipLifeEventType =
+  | "death_of_parent"
+  | "job_loss"
+  | "promotion"
+  | "conflict"
+  | "major_achievement";
+
+export type RecentRelationshipLifeEvent = {
+  id: string;
+  type: RecentRelationshipLifeEventType;
+  year: number;
+  relatedPersonId: string | null;
+};
+
 export type Person = {
   id: string;
   firstName: string;
@@ -164,4 +212,7 @@ export type Person = {
   friends: Friend[];
   relationshipScores: Record<string, number>;
   memories: Memory[];
+  diary: DiaryEntry[];
+  relationshipPreferences: RelationshipPreferences;
+  recentRelationshipLifeEvents: RecentRelationshipLifeEvent[];
 };

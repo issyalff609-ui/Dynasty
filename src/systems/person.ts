@@ -1,7 +1,11 @@
 import type {
   Aspiration,
+  DiaryEntry,
+  DiaryEntryCategory,
   DeathRecord,
   Person,
+  RecentRelationshipLifeEvent,
+  RelationshipPreferences,
   SkillRecord,
   Trait,
   TraitHistoryRecord,
@@ -15,6 +19,45 @@ import {
   isFriendStillInSchool,
 } from "./education";
 import { clamp } from "../utils/maths";
+
+const hashString = (value: string) => {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+};
+
+const pickStable = <T,>(items: readonly T[], seed: string) =>
+  items[hashString(seed) % items.length];
+
+export const getDefaultRelationshipPreferences = ({
+  id,
+  birthYear,
+}: Pick<Person, "id" | "birthYear">): RelationshipPreferences => ({
+  childrenDisposition: pickStable(
+    ["wants", "open", "unsure", "does_not_want"] as const,
+    `${id}-${birthYear}-children`
+  ),
+  marriageDisposition: pickStable(
+    ["wants", "open", "unsure", "does_not_want"] as const,
+    `${id}-${birthYear}-marriage`
+  ),
+  movingInDisposition: pickStable(
+    ["wants", "open", "unsure", "does_not_want"] as const,
+    `${id}-${birthYear}-moving-in`
+  ),
+  exBoundaryPreference: pickStable(
+    ["comfortable", "not_comfortable"] as const,
+    `${id}-${birthYear}-ex-boundary`
+  ),
+  relationshipStylePreference: pickStable(
+    ["closed", "open"] as const,
+    `${id}-${birthYear}-relationship-style`
+  ),
+});
 
 export const getPersonAge = (person: Pick<Person, "birthYear">, currentYear: number) =>
   currentYear - person.birthYear;
@@ -223,6 +266,7 @@ export const promoteNpcToPerson = (
 
   const gender = npc.gender ?? "Female";
   const birthYear = currentYear - npc.age;
+  const personId = npc.personId ?? `person-${Math.random().toString(36).slice(2, 10)}`;
   const strengths: Person["strengths"] = [];
   const weaknesses: Person["weaknesses"] = [];
   const academicPerformanceProfile = buildAcademicPerformanceProfile({
@@ -248,7 +292,7 @@ export const promoteNpcToPerson = (
       : [];
 
   const person: Person = {
-    id: npc.personId ?? `person-${Math.random().toString(36).slice(2, 10)}`,
+    id: personId,
     firstName: npc.firstName,
     lastName: npc.lastName,
     birthYear,
@@ -306,6 +350,12 @@ export const promoteNpcToPerson = (
     friends: [],
     relationshipScores: {},
     memories: [],
+    diary: [],
+    relationshipPreferences: getDefaultRelationshipPreferences({
+      id: personId,
+      birthYear,
+    }),
+    recentRelationshipLifeEvents: [],
   };
 
   return {
@@ -318,6 +368,43 @@ export const syncPersonAge = <T extends Person>(person: T, currentYear: number):
   ...person,
   age: getPersonAge(person, currentYear),
 });
+
+const createDiaryEntryId = () => `diary-${Math.random().toString(36).slice(2, 10)}`;
+
+export const addDiaryEntry = <T extends Person>(
+  person: T,
+  currentYear: number,
+  text: string,
+  category: DiaryEntryCategory | null = null
+): T => {
+  const entry: DiaryEntry = {
+    id: createDiaryEntryId(),
+    year: currentYear,
+    text,
+    category,
+  };
+
+  return {
+    ...person,
+    diary: [entry, ...person.diary],
+  };
+};
+
+export const addDiaryEntryIfMissing = <T extends Person>(
+  person: T,
+  currentYear: number,
+  text: string,
+  category: DiaryEntryCategory | null = null
+): T =>
+  person.diary.some((entry) => entry.text === text)
+    ? person
+    : addDiaryEntry(person, currentYear, text, category);
+
+export const getRecentRelationshipLifeEvents = (
+  person: Pick<Person, "recentRelationshipLifeEvents">,
+  currentYear: number
+): RecentRelationshipLifeEvent[] =>
+  person.recentRelationshipLifeEvents.filter((event) => currentYear - event.year <= 1);
 
 export const isPersonAlive = (person: Pick<Person, "death">) => person.death === null;
 

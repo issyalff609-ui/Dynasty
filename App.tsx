@@ -12,7 +12,11 @@ import { CharacterHeader } from "./src/components/CharacterHeader";
 import { PersonCard } from "./src/components/PersonCard";
 import { SectionCard } from "./src/components/SectionCard";
 import { StatBar } from "./src/components/StatBar";
-import { DATING_AGE_RANGES, type DatingAgeRange } from "./src/data/dating";
+import {
+  DATING_AGE_RANGES,
+  PARTNER_DATE_ACTIVITIES,
+  type DatingAgeRange,
+} from "./src/data/dating";
 import { CareerPanel } from "./src/screens/CareerPanel";
 import { EducationPanel } from "./src/screens/EducationPanel";
 import { APP_VERSION } from "./src/data/version";
@@ -87,14 +91,25 @@ import {
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
 import {
+  getDefaultRelationshipPreferences,
   getPersonAge,
   promoteNpcToPerson,
   syncLinkedSocialRecordsFromPeople,
   syncPersonAge,
 } from "./src/systems/person";
 import {
+  askPartnerForSpace,
+  bickerWithPartner,
+  breakUpOrDivorcePartner,
   buildFriendFromClassmate,
+  getAvailablePartnerConflictIssues,
+  getAvailablePartnerConversationTopics,
+  getActiveRomanticRelationshipBetween,
+  haveConversationAbout,
+  goOnDate,
   getRelationshipLabel,
+  proposeToPartner,
+  spendTimeTogether,
   startDating,
 } from "./src/systems/relationships";
 import type {
@@ -115,10 +130,18 @@ import type {
   PartTimeHoursBand,
   PartTimeJobListing,
 } from "./src/types/jobs";
-import type { Classmate, DatingProfile, Friend } from "./src/types/relationships";
+import type {
+  Classmate,
+  DatingProfile,
+  Friend,
+  PartnerBoundaryConversationTopic,
+  PartnerDateCategory,
+} from "./src/types/relationships";
 import { clamp } from "./src/utils/maths";
 import { convertLocalToGBP, formatMoney } from "./src/utils/money";
 import { randomInt } from "./src/utils/random";
+
+const HOUSEHOLD_STORAGE_KEY = "dynasties-household";
 
 const hydrateClassmate = (classmate: Classmate): Classmate => {
   const personId = classmate.personId ?? null;
@@ -264,8 +287,21 @@ const hydrateCharacter = (
   const careerHistory = Array.isArray(character.careerHistory)
     ? character.careerHistory
     : [];
+  const diary = Array.isArray(character.diary) ? character.diary : [];
   const romanticRelationships = Array.isArray(character.romanticRelationships)
-    ? character.romanticRelationships
+    ? character.romanticRelationships.map((relationship) => ({
+        ...relationship,
+        boundaries: relationship.boundaries ?? {},
+        spaceStatus: relationship.spaceStatus ?? null,
+      }))
+    : [];
+  const relationshipPreferences = character.relationshipPreferences ??
+    getDefaultRelationshipPreferences({
+      id: character.id,
+      birthYear,
+    });
+  const recentRelationshipLifeEvents = Array.isArray(character.recentRelationshipLifeEvents)
+    ? character.recentRelationshipLifeEvents
     : [];
   const datingMatches = Array.isArray(character.datingMatches)
     ? hydrateDatingProfiles(character.datingMatches)
@@ -281,6 +317,9 @@ const hydrateCharacter = (
       death,
       skills,
       careerHistory,
+      diary,
+      relationshipPreferences,
+      recentRelationshipLifeEvents,
       romanticRelationships,
       datingMatches,
       partner,
@@ -309,6 +348,9 @@ const hydrateCharacter = (
     character.death === death &&
     character.skills === skills &&
     character.careerHistory === careerHistory &&
+    character.diary === diary &&
+    character.relationshipPreferences === relationshipPreferences &&
+    character.recentRelationshipLifeEvents === recentRelationshipLifeEvents &&
     character.romanticRelationships === romanticRelationships &&
     character.datingMatches === resolvedCharacter.datingMatches &&
     character.partner === resolvedCharacter.partner
@@ -330,6 +372,9 @@ const hydrateCharacter = (
     death,
     skills,
     careerHistory,
+    diary,
+    relationshipPreferences,
+    recentRelationshipLifeEvents,
     romanticRelationships,
     datingMatches: resolvedCharacter.datingMatches,
     partner: resolvedCharacter.partner,
@@ -396,12 +441,31 @@ const buildHousehold = (): Household =>
     pickDegreeForJob,
   });
 
+const loadStoredHousehold = (): Household | null => {
+  if (typeof globalThis.localStorage === "undefined") {
+    return null;
+  }
+
+  const rawHousehold = globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
+  if (!rawHousehold) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawHousehold) as Household;
+  } catch {
+    return null;
+  }
+};
+
 const labelList = (items: string[]) => items.join(", ");
 
 const scoreText = (label: string, value: number) => `${label}: ${value}/100`;
 
 export default function App() {
-  const [household, setHousehold] = useState<Household>(() => buildHousehold());
+  const [household, setHousehold] = useState<Household>(
+    () => loadStoredHousehold() ?? buildHousehold()
+  );
   const [playerDetailsVisible, setPlayerDetailsVisible] = useState(false);
   const [familyVisible, setFamilyVisible] = useState(false);
   const [familyStatsVisible, setFamilyStatsVisible] = useState(false);
@@ -431,6 +495,13 @@ export default function App() {
   const [degreeOptionsVisible, setDegreeOptionsVisible] = useState(false);
   const [activitiesVisible, setActivitiesVisible] = useState(false);
   const [selectedActivityName, setSelectedActivityName] = useState<string | null>(null);
+  const [partnerActionsVisible, setPartnerActionsVisible] = useState(false);
+  const [goOnDateVisible, setGoOnDateVisible] = useState(false);
+  const [conversationVisible, setConversationVisible] = useState(false);
+  const [boundaryConversationVisible, setBoundaryConversationVisible] = useState(false);
+  const [majorDecisionsVisible, setMajorDecisionsVisible] = useState(false);
+  const [conflictVisible, setConflictVisible] = useState(false);
+  const [diaryVisible, setDiaryVisible] = useState(false);
   const [memoriesVisible, setMemoriesVisible] = useState(false);
   const [selectedFamilyMemberId, setSelectedFamilyMemberId] = useState<string | null>(null);
   const [tbcVisible, setTbcVisible] = useState(false);
@@ -465,6 +536,17 @@ export default function App() {
       };
     });
   }, []);
+
+  useEffect(() => {
+    if (typeof globalThis.localStorage === "undefined") {
+      return;
+    }
+
+    globalThis.localStorage.setItem(
+      HOUSEHOLD_STORAGE_KEY,
+      JSON.stringify(household)
+    );
+  }, [household]);
 
   const currentCharacter = useMemo(
     () => getCurrentHouseholdCharacter(household),
@@ -535,6 +617,77 @@ export default function App() {
   const selectedDatingMatch =
     currentCharacter.datingMatches.find((match) => match.id === selectedDatingMatchId) ??
     null;
+  const partnerCharacter = useMemo(
+    () =>
+      currentCharacter.partner?.personId
+        ? household.characters.find(
+            (character) => character.id === currentCharacter.partner?.personId
+          ) ?? null
+        : null,
+    [currentCharacter.partner?.personId, household.characters]
+  );
+  const livesTogetherWithPartner = useMemo(
+    () =>
+      !!partnerCharacter &&
+      household.house.residentIds.includes(currentCharacter.id) &&
+      household.house.residentIds.includes(partnerCharacter.id),
+    [currentCharacter.id, household.house.residentIds, partnerCharacter]
+  );
+  const availableConversationTopics = useMemo(
+    () =>
+      partnerCharacter
+        ? getAvailablePartnerConversationTopics(currentCharacter, partnerCharacter, {
+            currentYear: household.currentYear,
+            livesTogether: livesTogetherWithPartner,
+          })
+        : [],
+    [currentCharacter, household.currentYear, livesTogetherWithPartner, partnerCharacter]
+  );
+  const availableConflictIssues = useMemo(
+    () =>
+      partnerCharacter
+        ? getAvailablePartnerConflictIssues(currentCharacter, partnerCharacter)
+        : [],
+    [currentCharacter, partnerCharacter]
+  );
+  const activePartnerRelationship = useMemo(
+    () =>
+      partnerCharacter
+        ? getActiveRomanticRelationshipBetween(currentCharacter, partnerCharacter.id) ??
+          getActiveRomanticRelationshipBetween(partnerCharacter, currentCharacter.id)
+        : null,
+    [currentCharacter, partnerCharacter]
+  );
+  const isDatingPartner = activePartnerRelationship?.currentStatus === "Dating";
+  const isEngagedWithPartner = activePartnerRelationship?.currentStatus === "Engaged";
+  const isMarriedToPartner = activePartnerRelationship?.currentStatus === "Married";
+  const currentDiaryEntries = useMemo(
+    () => [...currentCharacter.diary].reverse(),
+    [currentCharacter.diary]
+  );
+  const dateCategoryRanges = useMemo(() => {
+    const buildRange = (category: PartnerDateCategory) => {
+      const matchingActivities = PARTNER_DATE_ACTIVITIES.filter(
+        (activity) => activity.category === category
+      );
+      const minCostGBP = Math.min(...matchingActivities.map((activity) => activity.costRangeGBP[0]));
+      const maxCostGBP = Math.max(...matchingActivities.map((activity) => activity.costRangeGBP[1]));
+
+      return minCostGBP === maxCostGBP
+        ? formatMoney(minCostGBP, household.country)
+        : `${formatMoney(minCostGBP, household.country)} to ${formatMoney(
+            maxCostGBP,
+            household.country
+          )}`;
+    };
+
+    return {
+      free: buildRange("free"),
+      cheap: buildRange("cheap"),
+      fun: buildRange("fun"),
+      expensive: buildRange("expensive"),
+    };
+  }, [household.country]);
 
   const closeAllPanels = () => {
     setPlayerDetailsVisible(false);
@@ -563,6 +716,13 @@ export default function App() {
     setDegreeOptionsVisible(false);
     setActivitiesVisible(false);
     setSelectedActivityName(null);
+    setPartnerActionsVisible(false);
+    setGoOnDateVisible(false);
+    setConversationVisible(false);
+    setBoundaryConversationVisible(false);
+    setMajorDecisionsVisible(false);
+    setConflictVisible(false);
+    setDiaryVisible(false);
     setMemoriesVisible(false);
     setSelectedFamilyMemberId(null);
     setTbcVisible(false);
@@ -1571,6 +1731,317 @@ export default function App() {
     setSelectedDatingMatchId(null);
   };
 
+  const spendTimeWithPartner = () => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        Alert.alert("Romance", "You do not currently have a partner.");
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        Alert.alert("Romance", "Your partner could not be found.");
+        return currentHousehold;
+      }
+
+      const interaction = spendTimeTogether(currentCharacter, partnerCharacter);
+      if (!interaction) {
+        Alert.alert("Romance", "You cannot spend time together right now.");
+        return currentHousehold;
+      }
+
+      Alert.alert(
+        "Romance",
+        `${interaction.result.text}\n\nFriendship +${interaction.result.friendshipChange}\nRomance +${interaction.result.romanceChange}`
+      );
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === interaction.person.id
+            ? interaction.person
+            : character.id === interaction.otherPerson.id
+              ? interaction.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const goOnDateWithPartner = (category: PartnerDateCategory) => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = goOnDate(
+        currentCharacter,
+        partnerCharacter,
+        category,
+        currentHousehold.currentYear
+      );
+      if (!result) {
+        return currentHousehold;
+      }
+
+      if (!result.success) {
+        Alert.alert("Go on a Date", result.text);
+        return currentHousehold;
+      }
+
+      Alert.alert(
+        "Go on a Date",
+        `${result.result.text}\n\n${formatMoney(
+          result.result.costGBP,
+          currentHousehold.country
+        )}\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}`
+      );
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? result.person
+            : character.id === result.otherPerson.id
+              ? result.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const haveConversationWithPartner = (
+    topic: "children" | "marriage" | "moving_in" | "boundaries" | "recent_life_event",
+    boundaryTopic?: PartnerBoundaryConversationTopic
+  ) => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = haveConversationAbout(
+        currentCharacter,
+        partnerCharacter,
+        topic,
+        currentHousehold.currentYear,
+        {
+          livesTogether:
+            currentHousehold.house.residentIds.includes(currentCharacter.id) &&
+            currentHousehold.house.residentIds.includes(partnerCharacter.id),
+        },
+        boundaryTopic
+      );
+      if (!result) {
+        return currentHousehold;
+      }
+
+      Alert.alert(
+        "Romance",
+        `${result.result.text}\n\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}\nDiary: ${
+          result.result.diaryEntryCreated ? "Yes" : "No"
+        }\nMemory: ${result.result.memoryCreated ? "Yes" : "No"}`
+      );
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? result.person
+            : character.id === result.otherPerson.id
+              ? result.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const showWipAlert = (title: string) => {
+    Alert.alert(title, "TBC");
+  };
+
+  const proposeToCurrentPartner = () => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = proposeToPartner(
+        currentCharacter,
+        partnerCharacter,
+        currentHousehold.currentYear
+      );
+      if (!result) {
+        return currentHousehold;
+      }
+
+      if (!result.result.statusChanged) {
+        return currentHousehold;
+      }
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? result.person
+            : character.id === result.otherPerson.id
+              ? result.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const askPartnerForSpaceAction = () => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = askPartnerForSpace(
+        currentCharacter,
+        partnerCharacter,
+        currentHousehold.currentYear
+      );
+      if (!result) {
+        return currentHousehold;
+      }
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? result.person
+            : character.id === result.otherPerson.id
+              ? result.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const bickerWithCurrentPartner = () => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = bickerWithPartner(currentCharacter, partnerCharacter);
+      if (!result) {
+        return currentHousehold;
+      }
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? result.person
+            : character.id === result.otherPerson.id
+              ? result.otherPerson
+              : character
+        ),
+      };
+    });
+  };
+
+  const breakUpOrDivorceCurrentPartner = () => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter?.partner?.personId) {
+        return currentHousehold;
+      }
+
+      const partnerCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentCharacter.partner?.personId
+      );
+      if (!partnerCharacter) {
+        return currentHousehold;
+      }
+
+      const result = breakUpOrDivorcePartner(
+        currentCharacter,
+        partnerCharacter,
+        currentHousehold.currentYear
+      );
+      if (!result) {
+        return currentHousehold;
+      }
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === result.person.id
+            ? {
+                ...result.person,
+                partner: null,
+              }
+            : character.id === result.otherPerson.id
+              ? {
+                  ...result.otherPerson,
+                  partner: null,
+                }
+              : character
+        ),
+      };
+    });
+  };
+
   const unmatchProfile = (matchId: string) => {
     updateCurrentCharacter((character) => ({
       ...character,
@@ -1808,7 +2279,254 @@ export default function App() {
                   {scoreText("Career Ceiling", currentCharacter.partner.careerCeiling)}
                 </Text>
                 <Pressable
-                  onPress={() => setPartnerVisible(false)}
+                  onPress={() => setPartnerActionsVisible((value) => !value)}
+                  style={styles.innerBox}
+                >
+                  <Text>Actions</Text>
+                </Pressable>
+                {partnerActionsVisible ? (
+                  <View style={styles.detailBox}>
+                    <Pressable
+                      onPress={spendTimeWithPartner}
+                      style={styles.innerBox}
+                    >
+                      <Text>Spend Time Together</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setGoOnDateVisible((value) => !value)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Go on a Date</Text>
+                    </Pressable>
+                    {goOnDateVisible ? (
+                      <View style={styles.detailBox}>
+                        <Pressable
+                          onPress={() => goOnDateWithPartner("free")}
+                          style={styles.innerBox}
+                        >
+                          <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => goOnDateWithPartner("cheap")}
+                          style={styles.innerBox}
+                        >
+                          <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => goOnDateWithPartner("fun")}
+                          style={styles.innerBox}
+                        >
+                          <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => goOnDateWithPartner("expensive")}
+                          style={styles.innerBox}
+                        >
+                          <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                    <Pressable
+                      onPress={() => setConversationVisible((value) => !value)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Have a Conversation About…</Text>
+                    </Pressable>
+                    {conversationVisible ? (
+                      <View style={styles.detailBox}>
+                        {availableConversationTopics.includes("children") ? (
+                          <Pressable
+                            onPress={() => haveConversationWithPartner("children")}
+                            style={styles.innerBox}
+                          >
+                            <Text>Children</Text>
+                          </Pressable>
+                        ) : null}
+                        {availableConversationTopics.includes("marriage") ? (
+                          <Pressable
+                            onPress={() => haveConversationWithPartner("marriage")}
+                            style={styles.innerBox}
+                          >
+                            <Text>Marriage</Text>
+                          </Pressable>
+                        ) : null}
+                        {availableConversationTopics.includes("moving_in") ? (
+                          <Pressable
+                            onPress={() => haveConversationWithPartner("moving_in")}
+                            style={styles.innerBox}
+                          >
+                            <Text>Moving In Together</Text>
+                          </Pressable>
+                        ) : null}
+                        {availableConversationTopics.includes("boundaries") ? (
+                          <>
+                            <Pressable
+                              onPress={() => setBoundaryConversationVisible((value) => !value)}
+                              style={styles.innerBox}
+                            >
+                              <Text>Boundaries</Text>
+                            </Pressable>
+                            {boundaryConversationVisible ? (
+                              <View style={styles.detailBox}>
+                                <Pressable
+                                  onPress={() =>
+                                    haveConversationWithPartner(
+                                      "boundaries",
+                                      "staying_close_with_an_ex"
+                                    )
+                                  }
+                                  style={styles.innerBox}
+                                >
+                                  <Text>Staying Close with an Ex</Text>
+                                </Pressable>
+                                <Pressable
+                                  onPress={() =>
+                                    haveConversationWithPartner(
+                                      "boundaries",
+                                      "closed_vs_open_relationship"
+                                    )
+                                  }
+                                  style={styles.innerBox}
+                                >
+                                  <Text>Closed vs Open Relationship</Text>
+                                </Pressable>
+                              </View>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </View>
+                    ) : null}
+                    <Pressable
+                      onPress={() => setMajorDecisionsVisible((value) => !value)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Major Decisions</Text>
+                    </Pressable>
+                    {majorDecisionsVisible ? (
+                      <View style={styles.detailBox}>
+                        <Pressable
+                          onPress={() => showWipAlert("Move in Together")}
+                          style={styles.innerBox}
+                        >
+                          <Text>Move in Together — WIP</Text>
+                        </Pressable>
+                        {isDatingPartner ? (
+                          <Pressable
+                            onPress={proposeToCurrentPartner}
+                            style={styles.innerBox}
+                          >
+                            <Text>Propose</Text>
+                          </Pressable>
+                        ) : null}
+                        <Pressable
+                          onPress={() => showWipAlert("Try for a Baby")}
+                          style={styles.innerBox}
+                        >
+                          <Text>Try for a Baby — WIP</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => showWipAlert("Purchase a Property Together")}
+                          style={styles.innerBox}
+                        >
+                          <Text>Purchase a Property Together — WIP</Text>
+                        </Pressable>
+                        {isEngagedWithPartner ? (
+                          <>
+                            <Pressable
+                              onPress={() => showWipAlert("Plan Wedding")}
+                              style={styles.innerBox}
+                            >
+                              <Text>Plan Wedding — WIP</Text>
+                            </Pressable>
+                            <Pressable
+                              onPress={() => showWipAlert("Elope")}
+                              style={styles.innerBox}
+                            >
+                              <Text>Elope — WIP</Text>
+                            </Pressable>
+                          </>
+                        ) : null}
+                        {isMarriedToPartner ? (
+                          <>
+                            <Pressable
+                              onPress={() => showWipAlert("Combine Finances")}
+                              style={styles.innerBox}
+                            >
+                              <Text>Combine Finances</Text>
+                            </Pressable>
+                            <Pressable
+                              onPress={() => showWipAlert("Separate Finances")}
+                              style={styles.innerBox}
+                            >
+                              <Text>Separate Finances</Text>
+                            </Pressable>
+                          </>
+                        ) : null}
+                      </View>
+                    ) : null}
+                    <Pressable
+                      onPress={() => setConflictVisible((value) => !value)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Conflict</Text>
+                    </Pressable>
+                    {conflictVisible ? (
+                      <View style={styles.detailBox}>
+                        <Pressable
+                          disabled={availableConflictIssues.length === 0}
+                          onPress={undefined}
+                          style={styles.innerBox}
+                        >
+                          <Text>Confront About…</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={askPartnerForSpaceAction}
+                          style={styles.innerBox}
+                        >
+                          <Text>Ask for Space</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => showWipAlert("Ask them to Move Out")}
+                          style={styles.innerBox}
+                        >
+                          <Text>Ask them to Move Out — WIP</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={bickerWithCurrentPartner}
+                          style={styles.innerBox}
+                        >
+                          <Text>Bicker</Text>
+                        </Pressable>
+                        {isDatingPartner || isEngagedWithPartner ? (
+                          <Pressable
+                            onPress={breakUpOrDivorceCurrentPartner}
+                            style={styles.innerBox}
+                          >
+                            <Text>Break Up</Text>
+                          </Pressable>
+                        ) : null}
+                        {isMarriedToPartner ? (
+                          <Pressable
+                            onPress={breakUpOrDivorceCurrentPartner}
+                            style={styles.innerBox}
+                          >
+                            <Text>Divorce</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+                <Pressable
+                  onPress={() => {
+                    setPartnerActionsVisible(false);
+                    setGoOnDateVisible(false);
+                    setConversationVisible(false);
+                    setBoundaryConversationVisible(false);
+                    setMajorDecisionsVisible(false);
+                    setConflictVisible(false);
+                    setPartnerVisible(false);
+                  }}
                   style={styles.innerBox}
                 >
                   <Text>Close</Text>
@@ -2228,6 +2946,36 @@ export default function App() {
                 setSelectedActivityName(null);
                 setActivitiesVisible(false);
               }}
+              style={styles.innerBox}
+            >
+              <Text>Close</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        <Pressable
+          onPress={() => toggleTopLevelPanel(diaryVisible, setDiaryVisible)}
+          style={styles.box}
+        >
+          <Text>Diary</Text>
+        </Pressable>
+
+        {diaryVisible ? (
+          <View style={styles.box}>
+            {currentDiaryEntries.length > 0 ? (
+              currentDiaryEntries.map((entry) => (
+                <View key={entry.id} style={styles.innerBox}>
+                  <Text>{entry.year}</Text>
+                  <Text>{entry.text}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={styles.innerBox}>
+                <Text>No diary entries yet.</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={() => setDiaryVisible(false)}
               style={styles.innerBox}
             >
               <Text>Close</Text>
