@@ -83,16 +83,19 @@ import {
   getCurrentHouseholdCharacter,
   getFamilyMembers,
   getHouseResidents,
+  isSwitchableImmediateFamilyMember,
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
 import {
   getPersonAge,
   promoteNpcToPerson,
+  syncLinkedSocialRecordsFromPeople,
   syncPersonAge,
 } from "./src/systems/person";
 import {
   buildFriendFromClassmate,
   getRelationshipLabel,
+  startDating,
 } from "./src/systems/relationships";
 import type {
   Character,
@@ -202,7 +205,9 @@ const hydrateDatingProfiles = (profiles: DatingProfile[]) => {
 
 const hydrateCharacter = (
   character: Character,
-  currentYear: number
+  currentYear: number,
+  allPeople: Character[],
+  country: Country
 ): Character => {
   const birthYear =
     typeof character.birthYear === "number"
@@ -282,46 +287,52 @@ const hydrateCharacter = (
     },
     currentYear
   );
+  const resolvedCharacter = syncLinkedSocialRecordsFromPeople(
+    syncedCharacter,
+    allPeople,
+    currentYear,
+    country
+  );
 
   if (
     character.birthYear === birthYear &&
-    character.age === syncedCharacter.age &&
+    character.age === resolvedCharacter.age &&
     character.academicPerformanceProfile === academicPerformanceProfile &&
     character.academicPerformanceScore === academicPerformanceScore &&
     character.studySessionsUsedThisYear === studySessionsUsedThisYear &&
     character.joinedClubs === joinedClubs &&
     character.individualReputation === individualReputation &&
-    character.classmates === classmates &&
-    character.friends === friends &&
+    character.classmates === resolvedCharacter.classmates &&
+    character.friends === resolvedCharacter.friends &&
     character.traitHistory === traitHistory &&
     character.aspirations === aspirations &&
     character.death === death &&
     character.skills === skills &&
     character.careerHistory === careerHistory &&
     character.romanticRelationships === romanticRelationships &&
-    character.datingMatches === datingMatches &&
-    character.partner === partner
+    character.datingMatches === resolvedCharacter.datingMatches &&
+    character.partner === resolvedCharacter.partner
   ) {
     return character;
   }
 
   return {
-    ...syncedCharacter,
+    ...resolvedCharacter,
     academicPerformanceProfile,
     academicPerformanceScore,
     studySessionsUsedThisYear,
     joinedClubs,
     individualReputation,
-    classmates,
-    friends,
+    classmates: resolvedCharacter.classmates,
+    friends: resolvedCharacter.friends,
     traitHistory,
     aspirations,
     death,
     skills,
     careerHistory,
     romanticRelationships,
-    datingMatches,
-    partner,
+    datingMatches: resolvedCharacter.datingMatches,
+    partner: resolvedCharacter.partner,
   };
 };
 
@@ -432,7 +443,12 @@ export default function App() {
     setHousehold((currentHousehold) => {
       let changed = false;
       const characters = currentHousehold.characters.map((character) => {
-        const hydrated = hydrateCharacter(character, currentHousehold.currentYear);
+        const hydrated = hydrateCharacter(
+          character,
+          currentHousehold.currentYear,
+          currentHousehold.characters,
+          currentHousehold.country
+        );
         if (hydrated !== character) {
           changed = true;
         }
@@ -914,6 +930,11 @@ export default function App() {
       });
       setSelectedFamilyMemberId(null);
       Alert.alert("Switch life", "Switched.");
+      return;
+    }
+
+    if (!isSwitchableImmediateFamilyMember(household, target.id)) {
+      Alert.alert("Switch life", "You can only switch to immediate family.");
       return;
     }
 
@@ -1516,19 +1537,33 @@ export default function App() {
       const nextCharacters = promotion.created
         ? [...currentHousehold.characters, promotion.person]
         : currentHousehold.characters;
+      const persistentCurrentCharacter =
+        nextCharacters.find(
+          (character) => character.id === currentHousehold.currentCharacterId
+        ) ?? currentCharacter;
+      const persistentPartner =
+        nextCharacters.find((character) => character.id === promotion.person.id) ??
+        promotion.person;
+      const [datedCurrentCharacter, datedPartner] = startDating(
+        persistentCurrentCharacter,
+        persistentPartner,
+        currentHousehold.currentYear
+      );
 
       Alert.alert("Romance", "Accepted.");
       return {
         ...currentHousehold,
         characters: nextCharacters.map((character) =>
-          character.id === currentHousehold.currentCharacterId
+          character.id === datedCurrentCharacter.id
             ? {
-                ...character,
+                ...datedCurrentCharacter,
                 partner: promotedMatch,
-                datingMatches: character.datingMatches.filter(
+                datingMatches: datedCurrentCharacter.datingMatches.filter(
                   (item) => item.id !== matchId
                 ),
               }
+            : character.id === datedPartner.id
+              ? datedPartner
             : character
         ),
       };

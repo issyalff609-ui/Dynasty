@@ -108,6 +108,18 @@ export const getRomanticRelationshipBetween = (
     .reverse()
     .find((relationship) => relationship.personId === otherPersonId) ?? null;
 
+export const getActiveRomanticRelationshipBetween = (
+  person: Character,
+  otherPersonId: string
+) =>
+  [...person.romanticRelationships]
+    .reverse()
+    .find(
+      (relationship) =>
+        relationship.personId === otherPersonId &&
+        relationship.currentStatus !== "Ended"
+    ) ?? null;
+
 export const isDating = (person: Character, otherPersonId: string) =>
   getRomanticRelationshipBetween(person, otherPersonId)?.currentStatus === "Dating";
 
@@ -178,23 +190,44 @@ const updateMirroredRelationship = (
   ];
 };
 
+const createRomanticRelationshipId = () =>
+  `romance-${Math.random().toString(36).slice(2, 10)}`;
+
 export const startDating = (
   person: Character,
   otherPerson: Character,
   currentYear: number
-): [Character, Character] =>
-  updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
-    id:
-      currentRelationship?.id ??
-      `romance-${Math.random().toString(36).slice(2, 10)}`,
-    personId: otherPerson.id,
-    currentStatus: "Dating",
-    startYear: currentRelationship?.startYear ?? currentYear,
-    engagementYear: currentRelationship?.engagementYear ?? null,
-    marriageYear: currentRelationship?.marriageYear ?? null,
-    endYear: null,
-    endReason: null,
-  }));
+): [Character, Character] => {
+  const latestRelationship =
+    getRomanticRelationshipBetween(person, otherPerson.id) ??
+    getRomanticRelationshipBetween(otherPerson, person.id);
+
+  return updateMirroredRelationship(person, otherPerson, (currentRelationship) => {
+    if (latestRelationship?.currentStatus === "Ended") {
+      return {
+        id: createRomanticRelationshipId(),
+        personId: otherPerson.id,
+        currentStatus: "Dating",
+        startYear: currentYear,
+        engagementYear: null,
+        marriageYear: null,
+        endYear: null,
+        endReason: null,
+      };
+    }
+
+    return {
+      id: currentRelationship?.id ?? createRomanticRelationshipId(),
+      personId: otherPerson.id,
+      currentStatus: "Dating",
+      startYear: currentRelationship?.startYear ?? currentYear,
+      engagementYear: currentRelationship?.engagementYear ?? null,
+      marriageYear: currentRelationship?.marriageYear ?? null,
+      endYear: null,
+      endReason: null,
+    };
+  });
+};
 
 export const becomeEngaged = (
   person: Character,
@@ -202,9 +235,7 @@ export const becomeEngaged = (
   currentYear: number
 ): [Character, Character] =>
   updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
-    id:
-      currentRelationship?.id ??
-      `romance-${Math.random().toString(36).slice(2, 10)}`,
+    id: currentRelationship?.id ?? createRomanticRelationshipId(),
     personId: otherPerson.id,
     currentStatus: "Engaged",
     startYear: currentRelationship?.startYear ?? currentYear,
@@ -220,9 +251,7 @@ export const getMarried = (
   currentYear: number
 ): [Character, Character] =>
   updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
-    id:
-      currentRelationship?.id ??
-      `romance-${Math.random().toString(36).slice(2, 10)}`,
+    id: currentRelationship?.id ?? createRomanticRelationshipId(),
     personId: otherPerson.id,
     currentStatus: "Married",
     startYear: currentRelationship?.startYear ?? currentYear,
@@ -237,9 +266,7 @@ export const separate = (
   otherPerson: Character
 ): [Character, Character] =>
   updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
-    id:
-      currentRelationship?.id ??
-      `romance-${Math.random().toString(36).slice(2, 10)}`,
+    id: currentRelationship?.id ?? createRomanticRelationshipId(),
     personId: otherPerson.id,
     currentStatus: "Separated",
     startYear: currentRelationship?.startYear ?? 0,
@@ -256,9 +283,7 @@ export const endRelationship = (
   endReason: Exclude<RomanticRelationshipEndReason, null>
 ): [Character, Character] =>
   updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
-    id:
-      currentRelationship?.id ??
-      `romance-${Math.random().toString(36).slice(2, 10)}`,
+    id: currentRelationship?.id ?? createRomanticRelationshipId(),
     personId: otherPerson.id,
     currentStatus: "Ended",
     startYear: currentRelationship?.startYear ?? currentYear,

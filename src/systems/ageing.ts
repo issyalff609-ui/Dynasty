@@ -20,7 +20,11 @@ import {
   shouldFriendGoToHigherEducation,
 } from "../systems/education";
 import { recalculateHouseholdFinance, getTaxSummary } from "../systems/finances";
-import { getPersonAge, syncPersonAge } from "../systems/person";
+import {
+  getPersonAge,
+  syncLinkedSocialRecordsFromPeople,
+  syncPersonAge,
+} from "../systems/person";
 import { syncFriendFromClassmate } from "../systems/relationships";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
@@ -299,6 +303,14 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
     jobRefreshesRemaining: 3,
     datingRefreshesRemaining: 2,
   }));
+  const syncedCharacters = refreshedCharacters.map((character) =>
+    syncLinkedSocialRecordsFromPeople(
+      character,
+      refreshedCharacters,
+      currentHousehold.currentYear + 1,
+      currentHousehold.country
+    )
+  );
 
   const nextNetWorthGBP = Math.max(
     0,
@@ -306,7 +318,7 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
       Math.round(
         recalculateHouseholdFinance(
           currentHousehold,
-          refreshedCharacters,
+          syncedCharacters,
           currentHousehold.currentCharacterId
         ).householdIncomeGBP * 0.35
       ) +
@@ -314,7 +326,7 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
   );
   const finance = recalculateHouseholdFinance(
     currentHousehold,
-    refreshedCharacters,
+    syncedCharacters,
     currentHousehold.currentCharacterId,
     nextNetWorthGBP
   );
@@ -322,7 +334,7 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
   return {
     ...currentHousehold,
     currentYear: currentHousehold.currentYear + 1,
-    characters: refreshedCharacters,
+    characters: syncedCharacters,
     ...finance,
   };
 };

@@ -113,6 +113,9 @@ export const recalculateHouseholdFinance = (
   const currentCharacter =
     characters.find((character) => character.id === currentCharacterId) ??
     characters[0];
+  const residentCharacters = characters.filter((character) =>
+    household.house.residentIds.includes(character.id)
+  );
   const householdIncomeGBP = characters
     .filter((character) => household.house.residentIds.includes(character.id))
     .reduce(
@@ -137,7 +140,10 @@ export const recalculateHouseholdFinance = (
     Math.max(
       household.netWorthGBP,
       household.house.valueGBP +
-        characters.reduce((sum, character) => sum + character.bankBalanceGBP, 0)
+        residentCharacters.reduce(
+          (sum, character) => sum + character.bankBalanceGBP,
+          0
+        )
     );
   const householdPlayerNetWorthGBP = household.house.residentIds.includes(
     currentCharacter.id

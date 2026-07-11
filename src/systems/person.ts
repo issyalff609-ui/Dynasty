@@ -6,7 +6,14 @@ import type {
   Trait,
   TraitHistoryRecord,
 } from "../types/person";
+import type { Country } from "../types/character";
+import type { Classmate, DatingProfile, Friend } from "../types/relationships";
 import { buildAcademicPerformanceProfile } from "./education";
+import {
+  formatFriendHigherEducationOccupation,
+  getSchoolOccupationLabelForAge,
+  isFriendStillInSchool,
+} from "./education";
 import { clamp } from "../utils/maths";
 
 export const getPersonAge = (person: Pick<Person, "birthYear">, currentYear: number) =>
@@ -16,6 +23,173 @@ export const getPersonById = (
   people: Person[],
   personId: string | null
 ) => (personId ? people.find((person) => person.id === personId) ?? null : null);
+
+export const resolveFriendPerson = (friend: Friend, people: Person[]) =>
+  getPersonById(people, friend.personId);
+
+export const resolveClassmatePerson = (classmate: Classmate, people: Person[]) =>
+  getPersonById(people, classmate.personId);
+
+export const resolveDatingProfilePerson = (
+  profile: DatingProfile,
+  people: Person[]
+) => getPersonById(people, profile.personId);
+
+const getFriendOccupationFromPerson = (
+  person: Person,
+  currentYear: number,
+  country: Country
+) => {
+  const age = getPersonAge(person, currentYear);
+
+  if (isFriendStillInSchool(age, country)) {
+    return getSchoolOccupationLabelForAge(age, country);
+  }
+
+  if (person.universityYearsRemaining > 0 && person.degree !== null) {
+    return formatFriendHigherEducationOccupation(
+      person.degree,
+      person.universityYearsRemaining
+    );
+  }
+
+  if (person.job !== "No job") {
+    return person.job;
+  }
+
+  return age >= 18 ? "Unemployed" : getSchoolOccupationLabelForAge(age, country);
+};
+
+export const syncFriendFromPerson = (
+  friend: Friend,
+  person: Person,
+  currentYear: number,
+  country: Country
+): Friend => ({
+  ...friend,
+  personId: person.id,
+  gender: person.gender,
+  firstName: person.firstName,
+  lastName: person.lastName,
+  age: getPersonAge(person, currentYear),
+  appearance: person.appearance,
+  intelligence: person.intelligence,
+  race: person.race,
+  traits: person.traits,
+  occupation: getFriendOccupationFromPerson(person, currentYear, country),
+  degree: person.degree,
+  universityYearsRemaining: person.universityYearsRemaining,
+});
+
+export const syncClassmateFromPerson = (
+  classmate: Classmate,
+  person: Person,
+  currentYear: number
+): Classmate => ({
+  ...classmate,
+  personId: person.id,
+  gender: person.gender,
+  firstName: person.firstName,
+  lastName: person.lastName,
+  age: getPersonAge(person, currentYear),
+  appearance: person.appearance,
+  intelligence: person.intelligence,
+  race: person.race,
+  traits: person.traits,
+});
+
+export const syncDatingProfileFromPerson = (
+  profile: DatingProfile,
+  person: Person,
+  currentYear: number
+): DatingProfile => ({
+  ...profile,
+  personId: person.id,
+  firstName: person.firstName,
+  lastName: person.lastName,
+  gender: person.gender,
+  age: getPersonAge(person, currentYear),
+  race: person.race,
+  appearance: person.appearance,
+  intelligence: person.intelligence,
+  job: person.job,
+  annualIncomeGBP: person.annualIncomeGBP,
+  careerCeiling: person.careerCeiling,
+  degree: person.degree,
+  traits: person.traits,
+});
+
+export const syncLinkedSocialRecordsFromPeople = (
+  character: Person,
+  people: Person[],
+  currentYear: number,
+  country: Country
+): Person => {
+  let classmatesChanged = false;
+  const nextClassmates = character.classmates.map((classmate) => {
+    const person = resolveClassmatePerson(classmate, people);
+    const nextClassmate = person
+      ? syncClassmateFromPerson(classmate, person, currentYear)
+      : classmate;
+    if (nextClassmate !== classmate) {
+      classmatesChanged = true;
+    }
+    return nextClassmate;
+  });
+  let friendsChanged = false;
+  const nextFriends = character.friends.map((friend) => {
+    const person = resolveFriendPerson(friend, people);
+    const nextFriend = person
+      ? syncFriendFromPerson(friend, person, currentYear, country)
+      : friend;
+    if (nextFriend !== friend) {
+      friendsChanged = true;
+    }
+    return nextFriend;
+  });
+  let datingMatchesChanged = false;
+  const nextDatingMatches = character.datingMatches.map((profile) => {
+    const person = resolveDatingProfilePerson(profile, people);
+    const nextProfile = person
+      ? syncDatingProfileFromPerson(profile, person, currentYear)
+      : profile;
+    if (nextProfile !== profile) {
+      datingMatchesChanged = true;
+    }
+    return nextProfile;
+  });
+  const nextPartner = character.partner
+    ? (() => {
+        const person = resolveDatingProfilePerson(character.partner, people);
+        return person
+          ? syncDatingProfileFromPerson(character.partner, person, currentYear)
+          : character.partner;
+      })()
+    : null;
+  const classmates = classmatesChanged ? nextClassmates : character.classmates;
+  const friends = friendsChanged ? nextFriends : character.friends;
+  const datingMatches = datingMatchesChanged
+    ? nextDatingMatches
+    : character.datingMatches;
+  const partner = nextPartner;
+
+  if (
+    classmates === character.classmates &&
+    friends === character.friends &&
+    datingMatches === character.datingMatches &&
+    partner === character.partner
+  ) {
+    return character;
+  }
+
+  return {
+    ...character,
+    classmates,
+    friends,
+    datingMatches,
+    partner,
+  };
+};
 
 export type PromotableNpc = {
   personId: string | null;
