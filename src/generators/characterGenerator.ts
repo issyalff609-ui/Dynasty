@@ -134,6 +134,7 @@ export const createCharacter = (
     pendingUniversityDegree: null,
     universityYearsRemaining: 0,
     genderPreference: "Both",
+    datingProfiles: [],
     datingMatches: [],
     romanticRelationships: [],
     partner: null,

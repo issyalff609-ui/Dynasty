@@ -274,6 +274,8 @@ const buildMirroredPartnerProfile = (
     interacted: sourcePartner.interacted,
     friendshipScore: sourcePartner.friendshipScore,
     romanceScore: sourcePartner.romanceScore,
+    matchChanceRandomness: sourcePartner.matchChanceRandomness,
+    datingCharacteristics: sourcePartner.datingCharacteristics,
   } satisfies DatingProfile;
 };
 

@@ -12,7 +12,12 @@ import type {
 } from "../types/character";
 import type { Degree } from "../types/education";
 import type { JobAssignment } from "../types/jobs";
-import type { DatingProfile } from "../types/relationships";
+import type {
+  DatingCharacteristic,
+  DatingCharacteristicPreference,
+  DatingCharacteristicStance,
+  DatingProfile,
+} from "../types/relationships";
 import { clamp } from "../utils/maths";
 import { getReputationContribution } from "../systems/reputation";
 import { pickOne, pickUpToTwo, randomInt } from "../utils/random";
@@ -161,6 +166,198 @@ export const getDatingAcceptanceChance = (datingScore: number) => {
 export const getPersistentDatingMatches = (matches: DatingProfile[]) =>
   matches.filter((match) => match.interacted || match.matched);
 
+export type MatchChanceBreakdownEntry = {
+  label: string;
+  value: number;
+};
+
+const DATING_CHARACTERISTICS: DatingCharacteristic[] = [
+  "Humour",
+  "Goofiness",
+  "Confidence",
+  "Ambition",
+  "Intelligence",
+  "Independence",
+];
+
+const DATING_CHARACTERISTIC_STANCES: DatingCharacteristicStance[] = [
+  "Likes",
+  "Aloof",
+  "Dislikes",
+];
+
+const getIncomeTierScore = (annualIncomeGBP: number) => {
+  if (annualIncomeGBP >= 120000) return 100;
+  if (annualIncomeGBP >= 60000) return 70;
+  if (annualIncomeGBP > 0) return 35;
+  return 0;
+};
+
+const getProfileAttractionToPlayer = (
+  player: Character,
+  profile: Pick<DatingProfile, "appearance" | "intelligence" | "traits" | "job" | "degree" | "age">
+) => {
+  let score = player.appearance * 0.75 + getCompatibilityScore(player, profile) * 0.25;
+
+  const ageGap = Math.abs(player.age - profile.age);
+  if (ageGap > 20) score -= 20;
+  else if (ageGap > 10) score -= 10;
+
+  return clamp(Math.round(score), 0, 100);
+};
+
+const getCompatibilityBreakdown = (
+  player: Character,
+  profile: Pick<DatingProfile, "firstName" | "traits" | "job" | "degree">
+) => {
+  const entries: MatchChanceBreakdownEntry[] = [{ label: "Compatibility base", value: 55 }];
+
+  if (player.traits.includes("Ambitious") && profile.traits.includes("Ambitious")) {
+    entries.push({ label: `Both characters are Ambitious`, value: 18 });
+  }
+  if (player.traits.includes("Caring") && profile.traits.includes("Caring")) {
+    entries.push({ label: `Both characters are Caring`, value: 16 });
+  }
+  if (player.traits.includes("Disciplined") && profile.traits.includes("Disciplined")) {
+    entries.push({ label: `Both characters are Disciplined`, value: 14 });
+  }
+  if (player.traits.includes("Loyal") && profile.traits.includes("Loyal")) {
+    entries.push({ label: `Both characters are Loyal`, value: 12 });
+  }
+  if (player.job !== "No job" && profile.job === player.job) {
+    entries.push({ label: `Both have the same job: ${profile.job}`, value: 12 });
+  }
+  if (player.degree !== null && profile.degree !== null) {
+    entries.push({ label: `Both have a degree`, value: 12 });
+  }
+  if (player.traits.includes("Rebellious") && profile.traits.includes("Disciplined")) {
+    entries.push({
+      label: `Player is Rebellious while ${profile.firstName} is Disciplined`,
+      value: -5,
+    });
+  }
+  if (player.traits.includes("Lazy") && profile.traits.includes("Ambitious")) {
+    entries.push({
+      label: `Player is Lazy while ${profile.firstName} is Ambitious`,
+      value: -4,
+    });
+  }
+  if (player.traits.includes("Impulsive") && profile.traits.includes("Anxious")) {
+    entries.push({
+      label: `Player is Impulsive while ${profile.firstName} is Anxious`,
+      value: -3,
+    });
+  }
+
+  const total = clamp(
+    entries.reduce((sum, entry) => sum + entry.value, 0),
+    0,
+    100
+  );
+
+  return { entries, total };
+};
+
+export const getIndividualMatchChanceBreakdown = (
+  player: Character,
+  profile: DatingProfile,
+  householdReputation: number
+) => {
+  const compatibility = getCompatibilityBreakdown(player, profile);
+  const mutualAttraction = Math.round(
+    (profile.attractiveness +
+      getProfileAttractionToPlayer(player, profile)) /
+      2
+  );
+  const ageGap = Math.abs(player.age - profile.age);
+  const intelligenceGap = Math.abs(player.intelligence - profile.intelligence);
+  const incomeTierScore = getIncomeTierScore(player.annualIncomeGBP);
+  const entries: MatchChanceBreakdownEntry[] = [{ label: "Base chance", value: 35 }];
+
+  entries.push({
+    label: `Player appearance (${player.appearance})`,
+    value: Math.round((player.appearance - 50) * 0.35),
+  });
+  entries.push({
+    label: `Mutual attraction (${mutualAttraction})`,
+    value: Math.round((mutualAttraction - 50) * 0.18),
+  });
+  entries.push({
+    label: `Trait and life compatibility (${compatibility.total})`,
+    value: Math.round((compatibility.total - 55) * 0.35),
+  });
+
+  if (ageGap <= 3) {
+    entries.push({ label: `Similar age gap (${ageGap} years)`, value: 8 });
+  } else if (ageGap <= 7) {
+    entries.push({ label: `Close age gap (${ageGap} years)`, value: 4 });
+  } else if (ageGap >= 20) {
+    entries.push({ label: `Large age gap (${ageGap} years)`, value: -18 });
+  } else if (ageGap >= 12) {
+    entries.push({ label: `Noticeable age gap (${ageGap} years)`, value: -10 });
+  }
+
+  entries.push({
+    label: `Player reputation (${householdReputation})`,
+    value: Math.round(getReputationContribution(householdReputation, 0.08)),
+  });
+
+  if (incomeTierScore > 0) {
+    entries.push({
+      label: `Player income (${player.annualIncomeGBP})`,
+      value: Math.round(incomeTierScore * 0.08),
+    });
+  }
+
+  if (intelligenceGap <= 10) {
+    entries.push({ label: `Similar intelligence (${intelligenceGap} gap)`, value: 3 });
+  } else if (intelligenceGap >= 30) {
+    entries.push({ label: `Large intelligence gap (${intelligenceGap})`, value: -5 });
+  }
+
+  entries.push({
+    label: `Small randomness (${profile.matchChanceRandomness >= 0 ? "+" : ""}${profile.matchChanceRandomness})`,
+    value: profile.matchChanceRandomness,
+  });
+
+  const unclampedTotal = entries.reduce((sum, entry) => sum + entry.value, 0);
+  const finalChance = clamp(Math.round(unclampedTotal), 0, 100);
+
+  return {
+    entries,
+    compatibilityEntries: compatibility.entries,
+    finalChance,
+  };
+};
+
+export const getIndividualMatchChance = (
+  player: Character,
+  profile: DatingProfile,
+  householdReputation: number
+) =>
+  getIndividualMatchChanceBreakdown(player, profile, householdReputation).finalChance;
+
+export const getRoseMatchChance = (
+  matchChance: number,
+  roseBoost: number
+) => clamp(matchChance + roseBoost, 0, 100);
+
+export const generateDatingCharacteristics = (): DatingCharacteristicPreference[] => {
+  const available = [...DATING_CHARACTERISTICS];
+  const selected: DatingCharacteristic[] = [];
+
+  while (selected.length < 3) {
+    const characteristic = pickOne(available);
+    selected.push(characteristic);
+    available.splice(available.indexOf(characteristic), 1);
+  }
+
+  return selected.map((characteristic) => ({
+    characteristic,
+    stance: pickOne(DATING_CHARACTERISTIC_STANCES),
+  }));
+};
+
 export const getDatingInteractionChance = (
   chemistryScore: number,
   friendshipScore: number,
@@ -271,18 +468,18 @@ type CreateCharacter = (
   namePool: NamePool
 ) => Character;
 
-export const generateDatingMatches = (
+export const generateDatingProfiles = (
   player: Character,
   householdCountry: Country,
   ageRange: DatingAgeRange,
   genderFilter: Preference,
-  existingMatches: DatingProfile[],
+  existingProfiles: DatingProfile[],
   createCharacter: CreateCharacter,
   assignJobToCharacter: (character: Character) => JobAssignment,
   pickDegreeForJob: (jobName: string) => Degree | null,
   currentYear: number
 ): DatingProfile[] => {
-  const existingIds = new Set(existingMatches.map((match) => match.id));
+  const existingIds = new Set(existingProfiles.map((match) => match.id));
   const [minAge, maxAge] =
     ageRange === DATING_AGE_RANGES[0]
       ? [Math.max(18, player.age - 5), Math.max(18, player.age + 5)]
@@ -339,12 +536,18 @@ export const generateDatingMatches = (
         job: age >= 18 ? jobListing.jobName : "No job",
         degree,
       }),
-      chemistry: null,
+      chemistry: calculateChemistryScore(player, {
+        traits,
+        job: age >= 18 ? jobListing.jobName : "No job",
+        degree,
+      }),
       chemistryUnlocked: false,
       matched: false,
       interacted: false,
       friendshipScore: 0,
       romanceScore: 0,
+      matchChanceRandomness: randomInt(-6, 6),
+      datingCharacteristics: [],
     };
 
     if (!existingIds.has(profile.id)) {
@@ -354,3 +557,5 @@ export const generateDatingMatches = (
 
   return matches;
 };
+
+export const generateDatingMatches = generateDatingProfiles;

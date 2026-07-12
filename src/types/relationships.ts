@@ -115,6 +115,23 @@ export type DatingProfile = {
   interacted: boolean;
   friendshipScore: number;
   romanceScore: number;
+  matchChanceRandomness: number;
+  datingCharacteristics: DatingCharacteristicPreference[];
+};
+
+export type DatingCharacteristic =
+  | "Humour"
+  | "Goofiness"
+  | "Confidence"
+  | "Ambition"
+  | "Intelligence"
+  | "Independence";
+
+export type DatingCharacteristicStance = "Likes" | "Aloof" | "Dislikes";
+
+export type DatingCharacteristicPreference = {
+  characteristic: DatingCharacteristic;
+  stance: DatingCharacteristicStance;
 };
 
 export type PartnerInteractionResult = {

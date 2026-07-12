@@ -190,6 +190,17 @@ export const syncLinkedSocialRecordsFromPeople = (
     }
     return nextFriend;
   });
+  let datingProfilesChanged = false;
+  const nextDatingProfiles = character.datingProfiles.map((profile) => {
+    const person = resolveDatingProfilePerson(profile, people);
+    const nextProfile = person
+      ? syncDatingProfileFromPerson(profile, person, currentYear)
+      : profile;
+    if (nextProfile !== profile) {
+      datingProfilesChanged = true;
+    }
+    return nextProfile;
+  });
   let datingMatchesChanged = false;
   const nextDatingMatches = character.datingMatches.map((profile) => {
     const person = resolveDatingProfilePerson(profile, people);
@@ -211,6 +222,9 @@ export const syncLinkedSocialRecordsFromPeople = (
     : null;
   const classmates = classmatesChanged ? nextClassmates : character.classmates;
   const friends = friendsChanged ? nextFriends : character.friends;
+  const datingProfiles = datingProfilesChanged
+    ? nextDatingProfiles
+    : character.datingProfiles;
   const datingMatches = datingMatchesChanged
     ? nextDatingMatches
     : character.datingMatches;
@@ -219,6 +233,7 @@ export const syncLinkedSocialRecordsFromPeople = (
   if (
     classmates === character.classmates &&
     friends === character.friends &&
+    datingProfiles === character.datingProfiles &&
     datingMatches === character.datingMatches &&
     partner === character.partner
   ) {
@@ -229,6 +244,7 @@ export const syncLinkedSocialRecordsFromPeople = (
     ...character,
     classmates,
     friends,
+    datingProfiles,
     datingMatches,
     partner,
   };
@@ -338,6 +354,7 @@ export const promoteNpcToPerson = (
     pendingUniversityDegree: null,
     universityYearsRemaining: npc.universityYearsRemaining ?? 0,
     genderPreference: "Both",
+    datingProfiles: [],
     datingMatches: [],
     romanticRelationships: [],
     partner: null,

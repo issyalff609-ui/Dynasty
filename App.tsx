@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -56,7 +56,6 @@ import {
 } from "./src/systems/careers";
 import { ageHouseholdOneYear } from "./src/systems/ageing";
 import {
-  buildAcademicPerformanceProfile,
   getAcademicPerformance,
   getAcademicPerformanceBandFromScore,
   getEducationStatus,
@@ -70,12 +69,14 @@ import {
   applyDatingInteraction,
   calculateChemistryScore,
   calculateDatingScore,
-  generateDatingMatches,
-  getDatingAcceptanceChance,
+  generateDatingProfiles,
   getDatingInteractionChance,
   getDatingScoreBreakdown,
+  generateDatingCharacteristics,
+  getIndividualMatchChance,
+  getIndividualMatchChanceBreakdown,
   getPartnerAcceptanceChance,
-  getPersistentDatingMatches,
+  getRoseMatchChance,
 } from "./src/systems/dating";
 import {
   calculateProgressiveTax,
@@ -91,12 +92,14 @@ import {
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
 import {
-  getDefaultRelationshipPreferences,
   getPersonAge,
   promoteNpcToPerson,
-  syncLinkedSocialRecordsFromPeople,
-  syncPersonAge,
 } from "./src/systems/person";
+import {
+  HOUSEHOLD_SAVE_DEBOUNCE_MS,
+  loadOrCreateHousehold,
+  saveHouseholdToStorage,
+} from "./src/systems/saveSystem";
 import {
   askPartnerForSpace,
   bickerWithPartner,
@@ -114,7 +117,6 @@ import {
 } from "./src/systems/relationships";
 import type {
   Character,
-  Country,
   EngineeringCategory,
   Gender,
   NamePool,
@@ -133,253 +135,12 @@ import type {
 import type {
   Classmate,
   DatingProfile,
-  Friend,
   PartnerBoundaryConversationTopic,
   PartnerDateCategory,
 } from "./src/types/relationships";
 import { clamp } from "./src/utils/maths";
 import { convertLocalToGBP, formatMoney } from "./src/utils/money";
 import { randomInt } from "./src/utils/random";
-
-const HOUSEHOLD_STORAGE_KEY = "dynasties-household";
-
-const hydrateClassmate = (classmate: Classmate): Classmate => {
-  const personId = classmate.personId ?? null;
-  const gender = classmate.gender ?? null;
-
-  if (classmate.personId === personId && classmate.gender === gender) {
-    return classmate;
-  }
-
-  return {
-    ...classmate,
-    personId,
-    gender,
-  };
-};
-
-const hydrateFriend = (friend: Friend): Friend => {
-  const personId = friend.personId ?? null;
-  const gender = friend.gender ?? null;
-
-  if (friend.personId === personId && friend.gender === gender) {
-    return friend;
-  }
-
-  return {
-    ...friend,
-    personId,
-    gender,
-  };
-};
-
-const hydrateDatingProfile = (profile: DatingProfile): DatingProfile => {
-  const personId = profile.personId ?? null;
-
-  if (profile.personId === personId) {
-    return profile;
-  }
-
-  return {
-    ...profile,
-    personId,
-  };
-};
-
-const hydrateClassmates = (classmates: Classmate[]) => {
-  let changed = false;
-  const nextClassmates = classmates.map((classmate) => {
-    const hydratedClassmate = hydrateClassmate(classmate);
-    if (hydratedClassmate !== classmate) {
-      changed = true;
-    }
-    return hydratedClassmate;
-  });
-
-  return changed ? nextClassmates : classmates;
-};
-
-const hydrateFriends = (friends: Friend[]) => {
-  let changed = false;
-  const nextFriends = friends.map((friend) => {
-    const hydratedFriend = hydrateFriend(friend);
-    if (hydratedFriend !== friend) {
-      changed = true;
-    }
-    return hydratedFriend;
-  });
-
-  return changed ? nextFriends : friends;
-};
-
-const hydrateDatingProfiles = (profiles: DatingProfile[]) => {
-  let changed = false;
-  const nextProfiles = profiles.map((profile) => {
-    const hydratedProfile = hydrateDatingProfile(profile);
-    if (hydratedProfile !== profile) {
-      changed = true;
-    }
-    return hydratedProfile;
-  });
-
-  return changed ? nextProfiles : profiles;
-};
-
-
-const hydrateCharacter = (
-  character: Character,
-  currentYear: number,
-  allPeople: Character[],
-  country: Country
-): Character => {
-  const birthYear =
-    typeof character.birthYear === "number"
-      ? character.birthYear
-      : currentYear - character.age;
-  const academicPerformanceProfile =
-    character.academicPerformanceProfile ??
-    buildAcademicPerformanceProfile({
-      traits: character.traits,
-      strengths: character.strengths,
-      weaknesses: character.weaknesses,
-    });
-
-  const academicPerformanceScore =
-    typeof character.academicPerformanceScore === "number"
-      ? character.academicPerformanceScore
-      : academicPerformanceProfile.finalScore;
-
-  const studySessionsUsedThisYear =
-    typeof character.studySessionsUsedThisYear === "number"
-      ? character.studySessionsUsedThisYear
-      : 0;
-
-  const joinedClubs = Array.isArray(character.joinedClubs)
-    ? character.joinedClubs
-    : [];
-  const individualReputation =
-    typeof character.individualReputation === "number"
-      ? character.individualReputation
-      : 50;
-  const classmates = Array.isArray(character.classmates)
-    ? hydrateClassmates(character.classmates)
-    : [];
-  const friends = Array.isArray(character.friends)
-    ? hydrateFriends(character.friends)
-    : [];
-  const traitHistory = Array.isArray(character.traitHistory)
-    ? character.traitHistory
-    : character.traits.map((trait) => ({
-        id: `trait-${Math.random().toString(36).slice(2, 10)}`,
-        trait,
-        change: "Gained" as const,
-        year: birthYear,
-        source: "Birth" as const,
-        reason: null,
-      }));
-  const aspirations = Array.isArray(character.aspirations)
-    ? character.aspirations
-    : [];
-  const death = character.death ?? null;
-  const skills = Array.isArray(character.skills)
-    ? character.skills
-    : [];
-  const careerHistory = Array.isArray(character.careerHistory)
-    ? character.careerHistory
-    : [];
-  const diary = Array.isArray(character.diary) ? character.diary : [];
-  const romanticRelationships = Array.isArray(character.romanticRelationships)
-    ? character.romanticRelationships.map((relationship) => ({
-        ...relationship,
-        boundaries: relationship.boundaries ?? {},
-        spaceStatus: relationship.spaceStatus ?? null,
-      }))
-    : [];
-  const relationshipPreferences = character.relationshipPreferences ??
-    getDefaultRelationshipPreferences({
-      id: character.id,
-      birthYear,
-    });
-  const recentRelationshipLifeEvents = Array.isArray(character.recentRelationshipLifeEvents)
-    ? character.recentRelationshipLifeEvents
-    : [];
-  const datingMatches = Array.isArray(character.datingMatches)
-    ? hydrateDatingProfiles(character.datingMatches)
-    : [];
-  const partner = character.partner ? hydrateDatingProfile(character.partner) : null;
-  const syncedCharacter = syncPersonAge(
-    {
-      ...character,
-      birthYear,
-      individualReputation,
-      traitHistory,
-      aspirations,
-      death,
-      skills,
-      careerHistory,
-      diary,
-      relationshipPreferences,
-      recentRelationshipLifeEvents,
-      romanticRelationships,
-      datingMatches,
-      partner,
-    },
-    currentYear
-  );
-  const resolvedCharacter = syncLinkedSocialRecordsFromPeople(
-    syncedCharacter,
-    allPeople,
-    currentYear,
-    country
-  );
-
-  if (
-    character.birthYear === birthYear &&
-    character.age === resolvedCharacter.age &&
-    character.academicPerformanceProfile === academicPerformanceProfile &&
-    character.academicPerformanceScore === academicPerformanceScore &&
-    character.studySessionsUsedThisYear === studySessionsUsedThisYear &&
-    character.joinedClubs === joinedClubs &&
-    character.individualReputation === individualReputation &&
-    character.classmates === resolvedCharacter.classmates &&
-    character.friends === resolvedCharacter.friends &&
-    character.traitHistory === traitHistory &&
-    character.aspirations === aspirations &&
-    character.death === death &&
-    character.skills === skills &&
-    character.careerHistory === careerHistory &&
-    character.diary === diary &&
-    character.relationshipPreferences === relationshipPreferences &&
-    character.recentRelationshipLifeEvents === recentRelationshipLifeEvents &&
-    character.romanticRelationships === romanticRelationships &&
-    character.datingMatches === resolvedCharacter.datingMatches &&
-    character.partner === resolvedCharacter.partner
-  ) {
-    return character;
-  }
-
-  return {
-    ...resolvedCharacter,
-    academicPerformanceProfile,
-    academicPerformanceScore,
-    studySessionsUsedThisYear,
-    joinedClubs,
-    individualReputation,
-    classmates: resolvedCharacter.classmates,
-    friends: resolvedCharacter.friends,
-    traitHistory,
-    aspirations,
-    death,
-    skills,
-    careerHistory,
-    diary,
-    relationshipPreferences,
-    recentRelationshipLifeEvents,
-    romanticRelationships,
-    datingMatches: resolvedCharacter.datingMatches,
-    partner: resolvedCharacter.partner,
-  };
-};
 
 const createCharacter = (
   role: Role,
@@ -441,31 +202,22 @@ const buildHousehold = (): Household =>
     pickDegreeForJob,
   });
 
-const loadStoredHousehold = (): Household | null => {
-  if (typeof globalThis.localStorage === "undefined") {
-    return null;
-  }
-
-  const rawHousehold = globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
-  if (!rawHousehold) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(rawHousehold) as Household;
-  } catch {
-    return null;
-  }
-};
-
 const labelList = (items: string[]) => items.join(", ");
 
 const scoreText = (label: string, value: number) => `${label}: ${value}/100`;
 
 export default function App() {
+  const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
+  if (initialLoadRef.current === null) {
+    initialLoadRef.current = loadOrCreateHousehold(buildHousehold);
+  }
+
   const [household, setHousehold] = useState<Household>(
-    () => loadStoredHousehold() ?? buildHousehold()
+    initialLoadRef.current.household
   );
+  const latestHouseholdRef = useRef(household);
+  const saveSequenceRef = useRef(0);
+  const skipInitialAutosaveRef = useRef(!initialLoadRef.current.shouldResave);
   const [playerDetailsVisible, setPlayerDetailsVisible] = useState(false);
   const [familyVisible, setFamilyVisible] = useState(false);
   const [familyStatsVisible, setFamilyStatsVisible] = useState(false);
@@ -484,8 +236,10 @@ export default function App() {
   const [selectedDatingMatchId, setSelectedDatingMatchId] = useState<string | null>(null);
   const [datingAgeFilter, setDatingAgeFilter] = useState<DatingAgeRange>("No age range");
   const [datingGenderFilter, setDatingGenderFilter] = useState<Preference>("Both");
-  const [datingPoolStarted, setDatingPoolStarted] = useState(false);
   const [datingScoreInfoVisible, setDatingScoreInfoVisible] = useState(false);
+  const [datingMatchesVisible, setDatingMatchesVisible] = useState(false);
+  const [matchChanceBreakdownVisible, setMatchChanceBreakdownVisible] = useState(false);
+  const [roseBoostByProfileId, setRoseBoostByProfileId] = useState<Record<string, number>>({});
   const [lookForJobsVisible, setLookForJobsVisible] = useState(false);
   const [fullTimeJobsVisible, setFullTimeJobsVisible] = useState(false);
   const [partTimeJobsVisible, setPartTimeJobsVisible] = useState(false);
@@ -511,41 +265,27 @@ export default function App() {
     useState<EngineeringCategory>("Jobs");
 
   useEffect(() => {
-    setHousehold((currentHousehold) => {
-      let changed = false;
-      const characters = currentHousehold.characters.map((character) => {
-        const hydrated = hydrateCharacter(
-          character,
-          currentHousehold.currentYear,
-          currentHousehold.characters,
-          currentHousehold.country
-        );
-        if (hydrated !== character) {
-          changed = true;
-        }
-        return hydrated;
-      });
-
-      if (!changed) {
-        return currentHousehold;
-      }
-
-      return {
-        ...currentHousehold,
-        characters,
-      };
-    });
-  }, []);
+    latestHouseholdRef.current = household;
+  }, [household]);
 
   useEffect(() => {
-    if (typeof globalThis.localStorage === "undefined") {
+    if (skipInitialAutosaveRef.current) {
+      skipInitialAutosaveRef.current = false;
       return;
     }
 
-    globalThis.localStorage.setItem(
-      HOUSEHOLD_STORAGE_KEY,
-      JSON.stringify(household)
-    );
+    const saveSequence = ++saveSequenceRef.current;
+    const timeoutId = globalThis.setTimeout(() => {
+      if (saveSequence !== saveSequenceRef.current) {
+        return;
+      }
+
+      saveHouseholdToStorage(latestHouseholdRef.current);
+    }, HOUSEHOLD_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      globalThis.clearTimeout(timeoutId);
+    };
   }, [household]);
 
   const currentCharacter = useMemo(
@@ -614,9 +354,45 @@ export default function App() {
     () => getTaxBrackets(household.country),
     [household.country]
   );
-  const selectedDatingMatch =
-    currentCharacter.datingMatches.find((match) => match.id === selectedDatingMatchId) ??
-    null;
+  const currentDatingProfile = currentCharacter.datingProfiles[0] ?? null;
+  const activeDatingMatches = currentCharacter.datingMatches;
+  const datingMatchLimitReached = activeDatingMatches.length >= 7;
+  const currentProfileMatchChance = currentDatingProfile
+    ? getIndividualMatchChance(currentCharacter, currentDatingProfile, household.reputation)
+    : 0;
+  const currentRoseBoost =
+    currentDatingProfile
+      ? roseBoostByProfileId[currentDatingProfile.id] ?? 20
+      : 0;
+  const currentProfileRoseMatchChance = currentDatingProfile
+    ? getRoseMatchChance(currentProfileMatchChance, currentRoseBoost)
+    : 0;
+  const currentProfileChemistry = currentDatingProfile?.chemistry ?? null;
+  const currentMatchChanceBreakdown = currentDatingProfile
+    ? getIndividualMatchChanceBreakdown(
+        currentCharacter,
+        currentDatingProfile,
+        household.reputation
+      )
+    : null;
+  useEffect(() => {
+    setDatingGenderFilter(currentCharacter.genderPreference);
+  }, [currentCharacter.id, currentCharacter.genderPreference]);
+
+  useEffect(() => {
+    if (!currentDatingProfile) {
+      return;
+    }
+
+    setRoseBoostByProfileId((current) =>
+      current[currentDatingProfile.id]
+        ? current
+        : {
+            ...current,
+            [currentDatingProfile.id]: randomInt(10, 30),
+          }
+    );
+  }, [currentDatingProfile]);
   const partnerCharacter = useMemo(
     () =>
       currentCharacter.partner?.personId
@@ -706,8 +482,9 @@ export default function App() {
     setDatingAppVisible(false);
     setPartnerVisible(false);
     setSelectedDatingMatchId(null);
-    setDatingPoolStarted(false);
     setDatingScoreInfoVisible(false);
+    setDatingMatchesVisible(false);
+    setMatchChanceBreakdownVisible(false);
     setLookForJobsVisible(false);
     setFullTimeJobsVisible(false);
     setPartTimeJobsVisible(false);
@@ -1012,7 +789,7 @@ export default function App() {
                 ))}
                 <Text>{`Income tier score: ${datingScoreDebug.incomeScore}/100`}</Text>
                 <Text>{`Final dating score: ${datingScoreDebug.finalScore}/100`}</Text>
-                <Text>{`Swipe acceptance chance from this score: ${(getDatingAcceptanceChance(currentDatingScore) * 100).toFixed(1)}%`}</Text>
+                <Text>Dating score now feeds profile-specific match calculations.</Text>
               </View>
             </>
           ) : null}
@@ -1507,13 +1284,12 @@ export default function App() {
 
   const startSwiping = () => {
     updateCurrentCharacter((character) => {
-      const persistentMatches = getPersistentDatingMatches(character.datingMatches);
       return {
         ...character,
-        datingMatches:
-          persistentMatches.length > 0
-            ? persistentMatches
-            : generateDatingMatches(
+        datingProfiles:
+          character.datingProfiles.length > 0
+            ? character.datingProfiles
+            : generateDatingProfiles(
                 character,
                 household.country,
                 datingAgeFilter,
@@ -1526,71 +1302,116 @@ export default function App() {
               ),
       };
     });
-    setDatingPoolStarted(true);
+    setDatingMatchesVisible(false);
+    setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
   };
 
   const refreshDatingMatches = () => {
     updateCurrentCharacter((character) => {
       if (character.datingRefreshesRemaining <= 0) return character;
-      const persistentMatches = getPersistentDatingMatches(character.datingMatches);
       return {
         ...character,
-        datingMatches: [
-          ...persistentMatches,
-          ...generateDatingMatches(
-            character,
-            household.country,
-            datingAgeFilter,
-            datingGenderFilter,
-            persistentMatches,
-            createCharacter,
-            assignJobToCharacter,
-            pickDegreeForJob,
-            household.currentYear
-          ),
-        ].slice(0, persistentMatches.length + 10),
+        datingProfiles: generateDatingProfiles(
+          character,
+          household.country,
+          datingAgeFilter,
+          datingGenderFilter,
+          [],
+          createCharacter,
+          assignJobToCharacter,
+          pickDegreeForJob,
+          household.currentYear
+        ),
         datingRefreshesRemaining: character.datingRefreshesRemaining - 1,
       };
     });
+    setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
   };
 
-  const tryMatchWithProfile = (matchId: string) => {
-    const accepted = Math.random() < getDatingAcceptanceChance(currentDatingScore);
-
-    const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
-    if (!match) return;
-
-    if (accepted) {
-      updateCurrentCharacter((character) => ({
-        ...character,
-        datingMatches: character.datingMatches.map((item) =>
-          item.id === matchId
-            ? {
-                ...item,
-                matched: true,
-              }
-            : item
-        ),
-      }));
-      Alert.alert("Dating App", `${match.firstName} matched with you!`);
+  const passDatingProfile = () => {
+    if (!currentDatingProfile) {
       return;
     }
 
     updateCurrentCharacter((character) => ({
       ...character,
-      datingMatches: character.datingMatches.filter((item) => item.id !== matchId),
+      datingProfiles: character.datingProfiles.filter(
+        (profile) => profile.id !== currentDatingProfile.id
+      ),
     }));
-    if (selectedDatingMatchId === matchId) {
-      setSelectedDatingMatchId(null);
+    setMatchChanceBreakdownVisible(false);
+  };
+
+  const resolveDatingProfileAction = (mode: "like" | "rose") => {
+    if (!currentDatingProfile || datingMatchLimitReached) {
+      return;
     }
+
+    const roseBoost =
+      mode === "rose"
+        ? roseBoostByProfileId[currentDatingProfile.id] ?? randomInt(10, 30)
+        : 0;
+    const matchChance =
+      mode === "rose"
+        ? getRoseMatchChance(currentProfileMatchChance, roseBoost)
+        : currentProfileMatchChance;
+    const accepted = Math.random() * 100 < matchChance;
+
+    updateCurrentCharacter((character) => {
+      if (character.datingMatches.length >= 7) {
+        return character;
+      }
+
+      const profile = character.datingProfiles.find(
+        (item) => item.id === currentDatingProfile.id
+      );
+      if (!profile) {
+        return character;
+      }
+
+      const remainingProfiles = character.datingProfiles.filter(
+        (item) => item.id !== currentDatingProfile.id
+      );
+
+      if (!accepted) {
+        return {
+          ...character,
+          datingProfiles: remainingProfiles,
+        };
+      }
+
+      const matchedProfile: DatingProfile = {
+        ...profile,
+        matched: true,
+        datingCharacteristics:
+          profile.datingCharacteristics.length === 3
+            ? profile.datingCharacteristics
+            : generateDatingCharacteristics(),
+      };
+
+      if (character.datingMatches.some((item) => item.id === matchedProfile.id)) {
+        return {
+          ...character,
+          datingProfiles: remainingProfiles,
+        };
+      }
+
+      return {
+        ...character,
+        datingProfiles: remainingProfiles,
+        datingMatches: [...character.datingMatches, matchedProfile],
+      };
+    });
+
+    setMatchChanceBreakdownVisible(false);
 
     Alert.alert(
       "Dating App",
-      Math.random() < 0.5
-        ? "You never heard back."
-        : `${match.firstName} didn't match with you.`
+      accepted
+        ? `It's a match!\n\nYou and ${currentDatingProfile.firstName} liked each other.`
+        : "No reply.\n\nYou never heard back."
     );
   };
 
@@ -2591,86 +2412,148 @@ export default function App() {
                 <Pressable onPress={startSwiping} style={styles.innerBox}>
                   <Text>Start Swiping</Text>
                 </Pressable>
-                {datingPoolStarted ? (
-                  <>
-                    <Text>{`Refreshes Remaining: ${currentCharacter.datingRefreshesRemaining}/2`}</Text>
-                    <Pressable onPress={refreshDatingMatches} style={styles.innerBox}>
-                      <Text>Refresh Dating App</Text>
-                    </Pressable>
-                  </>
-                ) : null}
-                {datingPoolStarted
-                  ? currentCharacter.datingMatches.map((match) => (
-                  <View key={match.id} style={styles.innerBox}>
-                    <Pressable
-                      onPress={() =>
-                        setSelectedDatingMatchId((current) =>
-                          current === match.id ? null : match.id
-                        )
-                      }
-                    >
-                      <Text>{`${match.interacted ? "* " : ""}${match.firstName} ${match.lastName}`}</Text>
-                    </Pressable>
-                    {selectedDatingMatchId === match.id ? (
+                <Text>{`Refreshes Remaining: ${currentCharacter.datingRefreshesRemaining}/2`}</Text>
+                <Text>{`Matches: ${activeDatingMatches.length}/7`}</Text>
+                <Pressable onPress={refreshDatingMatches} style={styles.innerBox}>
+                  <Text>Refresh Dating App</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setDatingMatchesVisible((value) => !value)}
+                  style={styles.innerBox}
+                >
+                  <Text>Matches</Text>
+                </Pressable>
+                {currentDatingProfile ? (
+                  <View style={styles.innerBox}>
+                    <Text>{`${currentDatingProfile.firstName} ${currentDatingProfile.lastName}`}</Text>
+                    <Text>{`Age: ${currentDatingProfile.age}`}</Text>
+                    <Text>{`Appearance: ${currentDatingProfile.appearance}/100`}</Text>
+                    <Text>{`Job: ${currentDatingProfile.job}`}</Text>
+                    <Text>Traits: ???</Text>
+                    <Text>{`Attractiveness: ${currentDatingProfile.attractiveness}/100`}</Text>
+                    <Text style={styles.testingText}>{`Intelligence: ${currentDatingProfile.intelligence}/100`}</Text>
+                    <Text style={styles.testingText}>{`Chemistry: ${currentProfileChemistry ?? "???"}/100`}</Text>
+                    <View style={styles.jobsHeaderRow}>
+                      <Text style={styles.testingText}>{`Match Chance: ${currentProfileMatchChance}%`}</Text>
+                      <Pressable
+                        onPress={() =>
+                          setMatchChanceBreakdownVisible((value) => !value)
+                        }
+                        style={styles.questionButton}
+                      >
+                        <Text>?</Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.testingText}>{`Rose Match Chance: ${currentProfileRoseMatchChance}%`}</Text>
+                    {matchChanceBreakdownVisible && currentMatchChanceBreakdown ? (
                       <View style={styles.detailBox}>
-                        <Text>{`Age: ${match.age}`}</Text>
-                        <Text>{`Appearance: ${match.appearance}/100`}</Text>
-                        <Text>{`Intelligence: ${match.intelligence}/100`}</Text>
-                        <Text>{`Job: ${match.job}`}</Text>
-                        <Text>{`Traits: ${
-                          match.friendshipScore > 10 ? labelList(match.traits) : "???"
-                        }`}</Text>
-                        <Text style={styles.testingText}>{`Attractiveness: ${match.attractiveness}/100`}</Text>
-                        <Text style={styles.testingText}>{`Chemistry: ${
-                          !match.chemistryUnlocked || match.chemistry === null
-                            ? "???"
-                            : `${match.chemistry}/100`
-                        }`}</Text>
-                        <Text>{`Friendship: ${match.friendshipScore}/100`}</Text>
-                        <Text>{`Romance: ${match.romanceScore}/100`}</Text>
-                        {!match.matched ? (
-                          <Pressable
-                            onPress={() => tryMatchWithProfile(match.id)}
-                            style={styles.innerBox}
+                        {currentMatchChanceBreakdown.entries.map((entry, index) => (
+                          <Text key={`${entry.label}-${index}`} style={styles.testingText}>
+                            {`${entry.label}: ${entry.value >= 0 ? "+" : ""}${entry.value}`}
+                          </Text>
+                        ))}
+                        {currentMatchChanceBreakdown.compatibilityEntries.map((entry, index) => (
+                          <Text
+                            key={`compatibility-${entry.label}-${index}`}
+                            style={styles.testingText}
                           >
-                            <Text>Match</Text>
-                          </Pressable>
-                        ) : null}
-                        {match.matched ? (
-                          <Pressable
-                            onPress={() => interactWithMatch(match.id, "text")}
-                            style={styles.innerBox}
-                          >
-                            <Text>Text</Text>
-                          </Pressable>
-                        ) : null}
-                        {match.matched ? (
-                          <Pressable
-                            onPress={() => interactWithMatch(match.id, "date")}
-                            style={styles.innerBox}
-                          >
-                            <Text>Go On A Date</Text>
-                          </Pressable>
-                        ) : null}
-                        {match.matched ? (
-                          <Pressable
-                            onPress={() => askToBePartner(match.id)}
-                            style={styles.innerBox}
-                          >
-                            <Text>Ask To Be Partner</Text>
-                          </Pressable>
-                        ) : null}
-                        <Pressable
-                          onPress={() => unmatchProfile(match.id)}
-                          style={styles.innerBox}
-                        >
-                          <Text>Unmatch</Text>
-                        </Pressable>
+                            {`${entry.label}: ${entry.value >= 0 ? "+" : ""}${entry.value}`}
+                          </Text>
+                        ))}
+                        <Text style={styles.testingText}>
+                          {`Final result: ${currentMatchChanceBreakdown.finalChance}%`}
+                        </Text>
                       </View>
                     ) : null}
+                    <Pressable onPress={passDatingProfile} style={styles.innerBox}>
+                      <Text>Pass</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={datingMatchLimitReached}
+                      onPress={
+                        datingMatchLimitReached
+                          ? undefined
+                          : () => resolveDatingProfileAction("like")
+                      }
+                      style={styles.innerBox}
+                    >
+                      <Text>Like</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={datingMatchLimitReached}
+                      onPress={
+                        datingMatchLimitReached
+                          ? undefined
+                          : () => resolveDatingProfileAction("rose")
+                      }
+                      style={styles.innerBox}
+                    >
+                      <Text>Send a Rose</Text>
+                    </Pressable>
                   </View>
-                ))
-                  : null}
+                ) : (
+                  <Text>No more profiles right now.</Text>
+                )}
+                {datingMatchesVisible ? (
+                  <View style={styles.detailBox}>
+                    {activeDatingMatches.length === 0 ? (
+                      <Text>No matches yet.</Text>
+                    ) : (
+                      activeDatingMatches.map((match) => (
+                        <View key={match.id} style={styles.innerBox}>
+                          <Pressable
+                            onPress={() =>
+                              setSelectedDatingMatchId((current) =>
+                                current === match.id ? null : match.id
+                              )
+                            }
+                          >
+                            <Text>{`${match.firstName} ${match.lastName}`}</Text>
+                          </Pressable>
+                          {selectedDatingMatchId === match.id ? (
+                            <View style={styles.detailBox}>
+                              <Text>{`Age: ${match.age}`}</Text>
+                              <Text>{`Appearance: ${match.appearance}/100`}</Text>
+                              <Text>{`Intelligence: ${match.intelligence}/100`}</Text>
+                              <Text>{`Job: ${match.job}`}</Text>
+                              <Text>{`Traits: ${labelList(match.traits)}`}</Text>
+                              <Text style={styles.testingText}>{`Attractiveness: ${match.attractiveness}/100`}</Text>
+                              <Text style={styles.testingText}>{`Chemistry: ${
+                                match.chemistry === null ? "???" : `${match.chemistry}/100`
+                              }`}</Text>
+                              <Text>{`Friendship: ${match.friendshipScore}/100`}</Text>
+                              <Text>{`Romance: ${match.romanceScore}/100`}</Text>
+                              <Pressable
+                                onPress={() => interactWithMatch(match.id, "text")}
+                                style={styles.innerBox}
+                              >
+                                <Text>Text</Text>
+                              </Pressable>
+                              <Pressable
+                                onPress={() => interactWithMatch(match.id, "date")}
+                                style={styles.innerBox}
+                              >
+                                <Text>Go On A Date</Text>
+                              </Pressable>
+                              <Pressable
+                                onPress={() => askToBePartner(match.id)}
+                                style={styles.innerBox}
+                              >
+                                <Text>Ask To Be Partner</Text>
+                              </Pressable>
+                              <Pressable
+                                onPress={() => unmatchProfile(match.id)}
+                                style={styles.innerBox}
+                              >
+                                <Text>Unmatch</Text>
+                              </Pressable>
+                            </View>
+                          ) : null}
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ) : null}
               </View>
             ) : null}
             <Pressable

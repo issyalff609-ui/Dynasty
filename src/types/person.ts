@@ -200,6 +200,7 @@ export type Person = {
   pendingUniversityDegree: Degree | null;
   universityYearsRemaining: number;
   genderPreference: Preference;
+  datingProfiles: DatingProfile[];
   datingMatches: DatingProfile[];
   romanticRelationships: RomanticRelationship[];
   partner: DatingProfile | null;
