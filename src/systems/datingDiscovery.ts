@@ -182,8 +182,9 @@ export const extendDatingCandidatePoolForDiscover = ({
     buildGeneratedCharacter,
     assignJobToCharacter,
     pickDegreeForJob,
-    currentYear
-  ).slice(0, Math.min(1, remainingViewSlots));
+    currentYear,
+    Math.min(1, remainingViewSlots)
+  );
 
   if (nextProfiles.length === 0) {
     return candidatePool;

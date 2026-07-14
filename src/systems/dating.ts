@@ -20,6 +20,7 @@ import type {
 } from "../types/relationships";
 import { clamp } from "../utils/maths";
 import { getReputationContribution } from "../systems/reputation";
+import { getPersonAge } from "./person";
 import { pickOne, pickUpToTwo, randomInt } from "../utils/random";
 import {
   pickAppearanceRaceForCountry,
@@ -69,7 +70,9 @@ export const calculateAttractivenessToPlayer = (
   score += getCompatibilityScore(player, profile) * 0.2;
   score += randomInt(-5, 5);
 
-  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
+  const ageGap = Math.abs(
+    getPersonAge(player, currentYear) - getDatingProfileAge(profile, currentYear)
+  );
   if (ageGap > 20 && Math.random() < 0.85) score -= 20;
   else if (ageGap > 10 && Math.random() < 0.55) score -= 10;
 
@@ -206,7 +209,9 @@ const getProfileAttractionToPlayer = (
 ) => {
   let score = player.appearance * 0.75 + getCompatibilityScore(player, profile) * 0.25;
 
-  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
+  const ageGap = Math.abs(
+    getPersonAge(player, currentYear) - getDatingProfileAge(profile, currentYear)
+  );
   if (ageGap > 20) score -= 20;
   else if (ageGap > 10) score -= 10;
 
@@ -277,7 +282,9 @@ export const getIndividualMatchChanceBreakdown = (
       getProfileAttractionToPlayer(player, profile, currentYear)) /
       2
   );
-  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
+  const ageGap = Math.abs(
+    getPersonAge(player, currentYear) - getDatingProfileAge(profile, currentYear)
+  );
   const intelligenceGap = Math.abs(player.intelligence - profile.intelligence);
   const incomeTierScore = getIncomeTierScore(player.annualIncomeGBP);
   const entries: MatchChanceBreakdownEntry[] = [{ label: "Base chance", value: 35 }];
@@ -491,7 +498,8 @@ export const generateDatingProfiles = (
   createCharacter: CreateCharacter,
   assignJobToCharacter: (character: Character) => JobAssignment,
   pickDegreeForJob: (jobName: string) => Degree | null,
-  currentYear: number
+  currentYear: number,
+  count = 10
 ): DatingProfile[] => {
   const existingIds = new Set(existingProfiles.map((match) => match.id));
   const minAge = Math.max(18, Math.min(ageFilter.minimumAge, ageFilter.maximumAge));
@@ -506,7 +514,7 @@ export const generateDatingProfiles = (
 
   const matches: DatingProfile[] = [];
 
-  while (matches.length < 10) {
+  while (matches.length < count) {
     const gender = pickOne(preferredGenderPool);
     const race = pickAppearanceRaceForCountry(householdCountry);
     const namePool = pickNamePoolForCountry(householdCountry);

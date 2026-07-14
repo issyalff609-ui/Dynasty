@@ -76,12 +76,12 @@ import {
   getDatingScoreBreakdown,
   getIndividualMatchChance,
   getIndividualMatchChanceBreakdown,
-  getPartnerAcceptanceChance,
   getRoseMatchChance,
 } from "./src/systems/dating";
 import {
   resolveDatingDiscoverAction,
   resolveDatingMatchTextInteraction,
+  resolveStartRelationshipWithMatch,
   type DatingDiscoverActionResult,
 } from "./src/systems/datingActions";
 import {
@@ -129,9 +129,7 @@ import {
   askPartnerForSpace,
   bickerWithPartner,
   breakUpOrDivorcePartner,
-  buildMirroredPartnerProfile,
   buildFriendFromClassmate,
-  endRelationship,
   getActiveRomanticRelationship,
   getAvailablePartnerConflictIssues,
   getAvailablePartnerConversationTopics,
@@ -142,7 +140,6 @@ import {
   getRelationshipLabel,
   proposeToPartner,
   spendTimeTogether,
-  startDating,
 } from "./src/systems/relationships";
 import type {
   Character,
@@ -266,6 +263,7 @@ export default function App() {
     initialLoadRef.current.household
   );
   const latestHouseholdRef = useRef(household);
+  const activeDatingProfileIdRef = useRef<string | null>(null);
   const saveSequenceRef = useRef(0);
   const skipInitialAutosaveRef = useRef(!initialLoadRef.current.shouldResave);
   const [playerDetailsVisible, setPlayerDetailsVisible] = useState(false);
@@ -501,8 +499,12 @@ export default function App() {
         character.id === currentHousehold.currentCharacterId
           ? updater(character)
           : character
-      ),
+        ),
     }));
+  };
+  const updateActiveDatingProfileId = (profileId: string | null) => {
+    activeDatingProfileIdRef.current = profileId;
+    setActiveDatingProfileId(profileId);
   };
   const selectedDatingMatch = useMemo(
     () =>
@@ -604,7 +606,7 @@ export default function App() {
 
   useEffect(() => {
     if (!datingDiscoverVisible) {
-      setActiveDatingProfileId(null);
+      updateActiveDatingProfileId(null);
       return;
     }
 
@@ -612,7 +614,7 @@ export default function App() {
       return;
     }
 
-    setActiveDatingProfileId(currentEligibleDatingProfiles[0]?.id ?? null);
+    updateActiveDatingProfileId(currentEligibleDatingProfiles[0]?.id ?? null);
   }, [
     activeDatingProfileId,
     currentDatingProfile,
@@ -755,7 +757,7 @@ export default function App() {
     }
 
     const nextDatingPreferences = buildSavedDatingPreferences();
-    setActiveDatingProfileId(null);
+    updateActiveDatingProfileId(null);
     setCurrentScreen("datingAppDiscover");
     setHousehold((currentHousehold) => {
       const currentCharacter = getCurrentHouseholdCharacter(currentHousehold);
@@ -791,65 +793,76 @@ export default function App() {
       return;
     }
 
-    if (processingDatingProfileIdRef.current === currentDatingProfile.id) {
+    const profileId = currentDatingProfile.id;
+
+    if (processingDatingProfileIdRef.current === profileId) {
       return;
     }
 
-    processingDatingProfileIdRef.current = currentDatingProfile.id;
+    processingDatingProfileIdRef.current = profileId;
     setDatingActionInProgress(true);
 
-    let actionResult: DatingDiscoverActionResult | null = null;
-    let resolvedProfileFirstName = currentDatingProfile.firstName;
+    try {
+      if (activeDatingProfileIdRef.current !== profileId) {
+        return;
+      }
 
-    updateCurrentCharacter((character) => {
+      const currentHousehold = latestHouseholdRef.current;
+      const character = getCurrentHouseholdCharacter(currentHousehold);
       const resolution = resolveDatingDiscoverAction({
         character,
-        currentProfileId: currentDatingProfile.id,
+        currentProfileId: profileId,
         action,
-        currentYear: household.currentYear,
-        reputation: household.reputation,
-        country: household.country,
+        currentYear: currentHousehold.currentYear,
+        reputation: currentHousehold.reputation,
+        country: currentHousehold.country,
       });
+      const resolvedActionResult: DatingDiscoverActionResult = resolution.result;
 
-      actionResult = resolution.result;
-      resolvedProfileFirstName = resolution.resolvedProfileFirstName;
+      if (activeDatingProfileIdRef.current !== profileId) {
+        return;
+      }
 
-      return resolution.character;
-    });
+      const nextHousehold = {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((item) =>
+          item.id === currentHousehold.currentCharacterId ? resolution.character : item
+        ),
+      };
 
-    const resolvedActionResult = (
-      actionResult ?? "profile_missing"
-    ) as DatingDiscoverActionResult;
+      latestHouseholdRef.current = nextHousehold;
+      setHousehold(nextHousehold);
 
-    if (
-      resolvedActionResult === "passed" ||
-      resolvedActionResult === "matched" ||
-      resolvedActionResult === "rejected"
-    ) {
-      setActiveDatingProfileId(null);
+      if (
+        resolvedActionResult === "passed" ||
+        resolvedActionResult === "matched" ||
+        resolvedActionResult === "rejected"
+      ) {
+        updateActiveDatingProfileId(null);
+      }
+
+      if (resolvedActionResult !== "profile_missing") {
+        setMatchChanceBreakdownVisible(false);
+      }
+
+      if (resolvedActionResult === "matched") {
+        Alert.alert(
+          "Dating App",
+          `It's a match!\n\nYou and ${resolution.resolvedProfileFirstName} liked each other.`
+        );
+      } else if (resolvedActionResult === "rejected") {
+        Alert.alert("Dating App", "No reply.\n\nYou never heard back.");
+      } else if (resolvedActionResult === "limit_reached") {
+        Alert.alert("Dating App", "You already have 7 matches.");
+      } else if (resolvedActionResult === "profile_missing") {
+        Alert.alert("Dating App", "Profile unavailable.");
+      } else if (resolvedActionResult === "no_roses") {
+        Alert.alert("Dating App", "No roses remaining.");
+      }
+    } finally {
+      processingDatingProfileIdRef.current = null;
+      setDatingActionInProgress(false);
     }
-
-    if (resolvedActionResult !== "profile_missing") {
-      setMatchChanceBreakdownVisible(false);
-    }
-
-    if (resolvedActionResult === "matched") {
-      Alert.alert(
-        "Dating App",
-        `It's a match!\n\nYou and ${resolvedProfileFirstName} liked each other.`
-      );
-    } else if (resolvedActionResult === "rejected") {
-      Alert.alert("Dating App", "No reply.\n\nYou never heard back.");
-    } else if (resolvedActionResult === "limit_reached") {
-      Alert.alert("Dating App", "You already have 7 matches.");
-    } else if (resolvedActionResult === "profile_missing") {
-      Alert.alert("Dating App", "Profile unavailable.");
-    } else if (resolvedActionResult === "no_roses") {
-      Alert.alert("Dating App", "No roses remaining.");
-    }
-
-    processingDatingProfileIdRef.current = null;
-    setDatingActionInProgress(false);
   };
 
   const unmatchProfile = (matchId: string) => {
@@ -946,169 +959,45 @@ export default function App() {
   };
 
   const startRelationshipWithMatch = (matchId: string) => {
-    let relationshipAccepted = false;
-    let relationshipRejected = false;
-    let previousPartnerName: string | null = null;
-
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
-      );
-      if (!currentCharacter) {
-        return currentHousehold;
-      }
-
-      const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
-      if (!match) {
-        return currentHousehold;
-      }
-
-      const activeRelationship = getActiveRomanticRelationship(currentCharacter);
-      const originalPartnerId =
-        activeRelationship?.personId ?? currentCharacter.partner?.personId ?? null;
-      const originalPartner =
-        originalPartnerId === null
-          ? null
-          : currentHousehold.characters.find((character) => character.id === originalPartnerId) ??
-            null;
-      const acceptanceChance = getPartnerAcceptanceChance(match);
-      const accepted = Math.random() * 100 < acceptanceChance;
-
-      if (!accepted) {
-        relationshipRejected = true;
-        return {
-          ...currentHousehold,
-          characters: currentHousehold.characters.map((character) =>
-            character.id === currentHousehold.currentCharacterId
-              ? {
-                  ...character,
-                  datingMatches: character.datingMatches.map((item) =>
-                    item.id === matchId
-                      ? {
-                          ...item,
-                          romanceScore: clamp(item.romanceScore - 10, 0, 100),
-                        }
-                      : item
-                  ),
-                }
-              : character
-          ),
-        };
-      }
-
-      const promotion = promoteNpcToPerson(
-        {
-          personId: match.personId,
-          firstName: match.firstName,
-          lastName: match.lastName,
-          age: getDatingProfileAge(match, currentHousehold.currentYear),
-          birthYear: match.birthYear,
-          gender: match.gender,
-          race: match.race,
-          appearance: match.appearance,
-          intelligence: match.intelligence,
-          traits: match.traits,
-          job: match.job,
-          annualIncomeGBP: match.annualIncomeGBP,
-          careerCeiling: match.careerCeiling,
-          degree: match.degree,
-          universityYearsRemaining: 0,
-        },
-        currentHousehold.currentYear,
-        currentHousehold.characters
-      );
-      const promotedMatch = {
-        ...match,
-        personId: promotion.person.id,
-      };
-      const nextCharacters = promotion.created
-        ? [...currentHousehold.characters, promotion.person]
-        : currentHousehold.characters;
-      const persistentCurrentCharacter =
-        nextCharacters.find(
-          (character) => character.id === currentHousehold.currentCharacterId
-        ) ?? currentCharacter;
-      const persistentPartner =
-        nextCharacters.find((character) => character.id === promotion.person.id) ??
-        promotion.person;
-      let relationshipCurrentCharacter = persistentCurrentCharacter;
-      let relationshipPartner = persistentPartner;
-      let endedOriginalPartnerId: string | null = null;
-
-      if (originalPartner) {
-        const persistentOriginalPartner =
-          nextCharacters.find((character) => character.id === originalPartner.id) ??
-          originalPartner;
-        const [endedCurrentCharacter, endedOriginalPartner] = endRelationship(
-          persistentCurrentCharacter,
-          persistentOriginalPartner,
-          currentHousehold.currentYear,
-          "Breakup"
-        );
-
-        relationshipCurrentCharacter = {
-          ...endedCurrentCharacter,
-          partner: null,
-        };
-        relationshipPartner = {
-          ...endedOriginalPartner,
-          partner: null,
-        };
-        endedOriginalPartnerId = endedOriginalPartner.id;
-      }
-
-      const [datedCurrentCharacter, datedPartner] = startDating(
-        relationshipCurrentCharacter,
-        persistentPartner,
-        currentHousehold.currentYear
-      );
-      const updatedCurrentCharacter = {
-        ...datedCurrentCharacter,
-        partner: promotedMatch,
-        datingMatches: datedCurrentCharacter.datingMatches.filter((item) => item.id !== matchId),
-      };
-      const mirroredPartnerProfile = buildMirroredPartnerProfile(
-        datedPartner,
-        updatedCurrentCharacter
-      );
-      const updatedPartner = mirroredPartnerProfile
-        ? {
-            ...datedPartner,
-            partner: mirroredPartnerProfile,
-          }
-        : datedPartner;
-
-      relationshipAccepted = true;
-      previousPartnerName = originalPartner?.firstName ?? null;
-
-      return {
-        ...currentHousehold,
-        characters: nextCharacters.map((character) =>
-          character.id === updatedCurrentCharacter.id
-            ? updatedCurrentCharacter
-            : character.id === updatedPartner.id
-              ? updatedPartner
-              : endedOriginalPartnerId !== null && character.id === endedOriginalPartnerId
-                ? relationshipPartner
-                : character
-        ),
-      };
+    const currentHousehold = latestHouseholdRef.current;
+    const result = resolveStartRelationshipWithMatch({
+      household: currentHousehold,
+      matchId,
     });
 
-    if (relationshipAccepted) {
+    if (result.household !== currentHousehold) {
+      latestHouseholdRef.current = result.household;
+      setHousehold(result.household);
+    }
+
+    if (result.status === "accepted") {
       Alert.alert(
         "Romance",
-        previousPartnerName
-          ? `${previousPartnerName} has left you.`
+        result.previousPartnerName
+          ? `${result.previousPartnerName} has left you.`
           : "Accepted."
       );
+      setSelectedDatingMatchId(null);
       goToRomancePartnerPage();
       return;
     }
 
-    if (relationshipRejected) {
+    if (result.status === "rejected") {
       Alert.alert("Romance", "Rejected.");
+      return;
     }
+
+    if (result.status === "match_missing") {
+      Alert.alert("Romance", "Match no longer available.");
+      setSelectedDatingMatchId(null);
+      setCurrentScreen("datingAppMatches");
+      return;
+    }
+
+    Alert.alert(
+      "Romance",
+      "Could not start the relationship because the existing relationship state was invalid."
+    );
   };
 
   const askToBePartner = (matchId: string) => {
@@ -2179,7 +2068,7 @@ export default function App() {
   };
 
   const startSwiping = () => {
-    setActiveDatingProfileId(null);
+    updateActiveDatingProfileId(null);
     updateCurrentCharacter((character) =>
       prepareDatingDiscoverCharacter({
         character,
@@ -2193,7 +2082,7 @@ export default function App() {
   };
 
   const refreshDatingMatches = () => {
-    setActiveDatingProfileId(null);
+    updateActiveDatingProfileId(null);
     updateCurrentCharacter((character) => {
       if (character.datingRefreshesRemaining <= 0) return character;
       const currentYearCandidatePool = getDatingCandidatePoolForYear(

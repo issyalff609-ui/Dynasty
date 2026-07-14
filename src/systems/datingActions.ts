@@ -2,15 +2,26 @@ import {
   applyDatingInteraction,
   calculateChemistryScore,
   generateDatingCharacteristics,
+  getDatingProfileAge,
   getDatingInteractionChance,
   getIndividualMatchChance,
   getRoseMatchChance,
+  getPartnerAcceptanceChance,
 } from "./dating";
+import { getCurrentHouseholdCharacter } from "./household";
+import { promoteNpcToPerson } from "./person";
 import { getDatingRoseStateForYear } from "./person";
 import { advanceDatingDiscoverState, getDatingCandidatePoolForYear, getDatingDiscoveryStateForYear } from "./datingDiscovery";
+import {
+  buildMirroredPartnerProfile,
+  endRelationship,
+  getActiveRomanticRelationship,
+  startDating,
+} from "./relationships";
 import type { Character } from "../types/character";
 import type { DatingProfile } from "../types/relationships";
 import type { Household } from "../types/household";
+import { clamp } from "../utils/maths";
 
 export type DatingDiscoverActionResult =
   | "passed"
@@ -200,6 +211,180 @@ export const resolveDatingMatchTextInteraction = ({
           return applyDatingInteraction(character, currentMatch, "text", accepted);
         })
         .sort((a, b) => Number(b.interacted) - Number(a.interacted)),
+    },
+  };
+};
+
+export type StartDatingRelationshipResult =
+  | {
+      status: "accepted";
+      household: Household;
+      previousPartnerName: string | null;
+    }
+  | {
+      status: "rejected";
+      household: Household;
+    }
+  | {
+      status: "match_missing";
+      household: Household;
+    }
+  | {
+      status: "invalid_relationship_state";
+      household: Household;
+    };
+
+export const resolveStartRelationshipWithMatch = ({
+  household,
+  matchId,
+}: {
+  household: Household;
+  matchId: string;
+}): StartDatingRelationshipResult => {
+  const currentCharacter = getCurrentHouseholdCharacter(household);
+  const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
+  if (!match) {
+    return {
+      status: "match_missing",
+      household,
+    };
+  }
+
+  const activeRelationship = getActiveRomanticRelationship(currentCharacter);
+  const originalPartnerId =
+    activeRelationship?.personId ?? currentCharacter.partner?.personId ?? null;
+  const originalPartner =
+    originalPartnerId === null
+      ? null
+      : household.characters.find((character) => character.id === originalPartnerId) ?? null;
+
+  if (activeRelationship && !originalPartner) {
+    return {
+      status: "invalid_relationship_state",
+      household,
+    };
+  }
+
+  const acceptanceChance = getPartnerAcceptanceChance(match);
+  const accepted = Math.random() * 100 < acceptanceChance;
+
+  if (!accepted) {
+    return {
+      status: "rejected",
+      household: {
+        ...household,
+        characters: household.characters.map((character) =>
+          character.id === household.currentCharacterId
+            ? {
+                ...character,
+                datingMatches: character.datingMatches.map((item) =>
+                  item.id === matchId
+                    ? {
+                        ...item,
+                        romanceScore: clamp(item.romanceScore - 10, 0, 100),
+                      }
+                    : item
+                ),
+              }
+            : character
+        ),
+      },
+    };
+  }
+
+  const promotion = promoteNpcToPerson(
+    {
+      personId: match.personId,
+      firstName: match.firstName,
+      lastName: match.lastName,
+      age: getDatingProfileAge(match, household.currentYear),
+      birthYear: match.birthYear,
+      gender: match.gender,
+      race: match.race,
+      appearance: match.appearance,
+      intelligence: match.intelligence,
+      traits: match.traits,
+      job: match.job,
+      annualIncomeGBP: match.annualIncomeGBP,
+      careerCeiling: match.careerCeiling,
+      degree: match.degree,
+      universityYearsRemaining: 0,
+    },
+    household.currentYear,
+    household.characters
+  );
+  const promotedMatch: DatingProfile = {
+    ...match,
+    personId: promotion.person.id,
+  };
+  const nextCharacters = promotion.created
+    ? [...household.characters, promotion.person]
+    : household.characters;
+  const persistentCurrentCharacter =
+    nextCharacters.find((character) => character.id === household.currentCharacterId) ??
+    currentCharacter;
+  const persistentPartner =
+    nextCharacters.find((character) => character.id === promotion.person.id) ??
+    promotion.person;
+  let relationshipCurrentCharacter = persistentCurrentCharacter;
+  let relationshipPartner = persistentPartner;
+  let endedOriginalPartner: Character | null = null;
+
+  if (originalPartner) {
+    const persistentOriginalPartner =
+      nextCharacters.find((character) => character.id === originalPartner.id) ?? originalPartner;
+    const [endedCurrentCharacter, endedPartner] = endRelationship(
+      persistentCurrentCharacter,
+      persistentOriginalPartner,
+      household.currentYear,
+      "Breakup"
+    );
+
+    relationshipCurrentCharacter = {
+      ...endedCurrentCharacter,
+      partner: null,
+    };
+    endedOriginalPartner = {
+      ...endedPartner,
+      partner: null,
+    };
+  }
+
+  const [datedCurrentCharacter, datedPartner] = startDating(
+    relationshipCurrentCharacter,
+    relationshipPartner,
+    household.currentYear
+  );
+  const updatedCurrentCharacter: Character = {
+    ...datedCurrentCharacter,
+    partner: promotedMatch,
+    datingMatches: datedCurrentCharacter.datingMatches.filter((item) => item.id !== matchId),
+  };
+  const mirroredPartnerProfile = buildMirroredPartnerProfile(
+    datedPartner,
+    updatedCurrentCharacter
+  );
+  const updatedPartner = mirroredPartnerProfile
+    ? {
+        ...datedPartner,
+        partner: mirroredPartnerProfile,
+      }
+    : datedPartner;
+
+  return {
+    status: "accepted",
+    previousPartnerName: originalPartner?.firstName ?? null,
+    household: {
+      ...household,
+      characters: nextCharacters.map((character) =>
+        character.id === updatedCurrentCharacter.id
+          ? updatedCurrentCharacter
+          : character.id === updatedPartner.id
+            ? updatedPartner
+            : endedOriginalPartner && character.id === endedOriginalPartner.id
+              ? endedOriginalPartner
+              : character
+      ),
     },
   };
 };
