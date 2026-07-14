@@ -235,7 +235,7 @@ const buildSpendTimeTogetherText = (partnerName: string) =>
     () => `You and ${partnerName} visited friends together.`,
   ])();
 
-const buildMirroredPartnerProfile = (
+export const buildMirroredPartnerProfile = (
   person: Character,
   otherPerson: Character
 ) => {
@@ -258,7 +258,7 @@ const buildMirroredPartnerProfile = (
     firstName: otherPerson.firstName,
     lastName: otherPerson.lastName,
     gender: otherPerson.gender,
-    age: otherPerson.age,
+    birthYear: otherPerson.birthYear,
     race: otherPerson.race,
     appearance: otherPerson.appearance,
     intelligence: otherPerson.intelligence,
@@ -275,6 +275,7 @@ const buildMirroredPartnerProfile = (
     friendshipScore: sourcePartner.friendshipScore,
     romanceScore: sourcePartner.romanceScore,
     matchChanceRandomness: sourcePartner.matchChanceRandomness,
+    roseMatchBoost: sourcePartner.roseMatchBoost,
     datingCharacteristics: sourcePartner.datingCharacteristics,
   } satisfies DatingProfile;
 };
@@ -316,13 +317,13 @@ const replaceDatePlaceholders = (
     .replaceAll("[Artist]", artist ?? "[Artist]")
     .replaceAll("[City]", city ?? "[City]");
 
-const resolveDatePlaceholders = (otherPerson: Character, activity: PartnerDateActivity) => {
+const resolveDatePlaceholders = (otherPersonName: string, activity: PartnerDateActivity) => {
   const movieTitle = activity.usesMovieTitle ? pickOne([...MOVIE_TITLES]) : null;
   const artist = activity.usesArtist ? pickOne([...DATE_ARTISTS]) : null;
   const city = activity.usesCity ? pickOne([...DATE_CITIES]) : null;
 
   return {
-    partnerName: getPartnerDisplayName(otherPerson),
+    partnerName: otherPersonName,
     movieTitle,
     artist,
     city,
@@ -341,12 +342,18 @@ const resolveDateText = (
     placeholders.city
   );
 
-const getDateResultTier = (person: Character): PartnerDateResultTier => {
-  const friendship = person.partner?.friendshipScore ?? 0;
-  const romance = person.partner?.romanceScore ?? 0;
-  const chemistry = person.partner?.chemistry ?? 50;
-  const attraction = person.partner?.attractiveness ?? 0;
-  const relationshipScore = (friendship + romance + chemistry + attraction) / 4;
+const getDateResultTierFromScores = ({
+  friendship,
+  romance,
+  chemistry,
+  attraction,
+}: {
+  friendship: number;
+  romance: number;
+  chemistry: number | null;
+  attraction: number;
+}): PartnerDateResultTier => {
+  const relationshipScore = (friendship + romance + (chemistry ?? 50) + attraction) / 4;
 
   if (relationshipScore < 30) {
     return "poor";
@@ -362,6 +369,14 @@ const getDateResultTier = (person: Character): PartnerDateResultTier => {
 
   return "great";
 };
+
+const getDateResultTier = (person: Character): PartnerDateResultTier =>
+  getDateResultTierFromScores({
+    friendship: person.partner?.friendshipScore ?? 0,
+    romance: person.partner?.romanceScore ?? 0,
+    chemistry: person.partner?.chemistry ?? 50,
+    attraction: person.partner?.attractiveness ?? 0,
+  });
 
 const rollDateStatChanges = (
   tier: PartnerDateResultTier
@@ -405,6 +420,72 @@ const maybeCreateDateMemory = (
   return {
     ...person,
     memories: [createMemory(memoryText), ...person.memories].slice(0, 20),
+  };
+};
+
+const resolveDateExperience = ({
+  bankBalanceGBP,
+  otherPersonName,
+  category,
+  friendship,
+  romance,
+  chemistry,
+  attraction,
+}: {
+  bankBalanceGBP: number;
+  otherPersonName: string;
+  category: PartnerDateCategory;
+  friendship: number;
+  romance: number;
+  chemistry: number | null;
+  attraction: number;
+}):
+  | {
+      success: false;
+      text: "You cannot afford this date.";
+    }
+  | {
+      success: true;
+      result: PartnerDateResult;
+      memoryText: string | null;
+      memoryChance: number;
+    } => {
+  const matchingActivities = PARTNER_DATE_ACTIVITIES.filter(
+    (activity) => activity.category === category
+  );
+  const activity = pickOne(matchingActivities);
+  const costGBP = randomInt(activity.costRangeGBP[0], activity.costRangeGBP[1]);
+
+  if (bankBalanceGBP < costGBP) {
+    return {
+      success: false,
+      text: "You cannot afford this date.",
+    };
+  }
+
+  const tier = getDateResultTierFromScores({
+    friendship,
+    romance,
+    chemistry,
+    attraction,
+  });
+  const { friendshipChange, romanceChange } = rollDateStatChanges(tier);
+  const placeholders = resolveDatePlaceholders(otherPersonName, activity);
+  const resultText = resolveDateText(activity.resultText, placeholders);
+  const memoryText = activity.memoryText
+    ? resolveDateText(activity.memoryText, placeholders)
+    : null;
+
+  return {
+    success: true,
+    result: {
+      text: resultText,
+      costGBP,
+      friendshipChange,
+      romanceChange,
+    },
+    memoryText,
+    memoryChance: activity.memoryChance,
   };
 };
 
@@ -1167,56 +1248,104 @@ export const goOnDate = (
     return null;
   }
 
-  const matchingActivities = PARTNER_DATE_ACTIVITIES.filter(
-    (activity) => activity.category === category
-  );
-  const activity = pickOne(matchingActivities);
-  const costGBP = randomInt(activity.costRangeGBP[0], activity.costRangeGBP[1]);
-
-  if (person.bankBalanceGBP < costGBP) {
-    return {
-      success: false,
-      text: "You cannot afford this date.",
-    };
+  const resolvedDate = resolveDateExperience({
+    bankBalanceGBP: person.bankBalanceGBP,
+    otherPersonName: getPartnerDisplayName(otherPerson),
+    category,
+    friendship: person.partner.friendshipScore,
+    romance: person.partner.romanceScore,
+    chemistry: person.partner.chemistry,
+    attraction: person.partner.attractiveness,
+  });
+  if (!resolvedDate.success) {
+    return resolvedDate;
   }
 
-  const tier = getDateResultTier(person);
-  const { friendshipChange, romanceChange } = rollDateStatChanges(tier);
-  const placeholders = resolveDatePlaceholders(otherPerson, activity);
-  const resultText = resolveDateText(activity.resultText, placeholders);
-  const memoryText = activity.memoryText
-    ? resolveDateText(activity.memoryText, placeholders)
-    : null;
   const nextPerson = maybeCreateDateMemory(
     {
       ...updatePartnerRelationshipScores(
         person,
         otherPerson,
-        friendshipChange,
-        romanceChange
+        resolvedDate.result.friendshipChange,
+        resolvedDate.result.romanceChange
       ),
-      bankBalanceGBP: person.bankBalanceGBP - costGBP,
+      bankBalanceGBP: person.bankBalanceGBP - resolvedDate.result.costGBP,
     },
-    memoryText,
-    activity.memoryChance
+    resolvedDate.memoryText,
+    resolvedDate.memoryChance
   );
   const nextOtherPerson = updatePartnerRelationshipScores(
     otherPerson,
     person,
-    friendshipChange,
-    romanceChange
+    resolvedDate.result.friendshipChange,
+    resolvedDate.result.romanceChange
   );
 
   return {
     success: true,
     person: nextPerson,
     otherPerson: nextOtherPerson,
-    result: {
-      text: resultText,
-      costGBP,
-      friendshipChange,
-      romanceChange,
+    result: resolvedDate.result,
+  };
+};
+
+export const goOnDateWithMatch = (
+  person: Character,
+  match: DatingProfile,
+  category: PartnerDateCategory
+):
+  | {
+      success: false;
+      text: "You cannot afford this date.";
+    }
+  | {
+      success: true;
+      person: Character;
+      match: DatingProfile;
+      result: PartnerDateResult;
+    } => {
+  const resolvedDate = resolveDateExperience({
+    bankBalanceGBP: person.bankBalanceGBP,
+    otherPersonName: match.firstName,
+    category,
+    friendship: match.friendshipScore,
+    romance: match.romanceScore,
+    chemistry: match.chemistry,
+    attraction: match.attractiveness,
+  });
+  if (!resolvedDate.success) {
+    return resolvedDate;
+  }
+
+  const nextPerson = maybeCreateDateMemory(
+    {
+      ...person,
+      bankBalanceGBP: person.bankBalanceGBP - resolvedDate.result.costGBP,
     },
+    resolvedDate.memoryText,
+    resolvedDate.memoryChance
+  );
+  const nextMatch = {
+    ...match,
+    chemistryUnlocked: true,
+    interacted: true,
+    friendshipScore: clamp(
+      match.friendshipScore + resolvedDate.result.friendshipChange,
+      0,
+      100
+    ),
+    romanceScore: clamp(
+      match.romanceScore + resolvedDate.result.romanceChange,
+      0,
+      100
+    ),
+  };
+
+  return {
+    success: true,
+    person: nextPerson,
+    match: nextMatch,
+    result: resolvedDate.result,
   };
 };
 

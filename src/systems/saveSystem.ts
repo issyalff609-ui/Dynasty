@@ -1,5 +1,11 @@
 import { buildAcademicPerformanceProfile } from "./education";
-import { getDefaultRelationshipPreferences, syncLinkedSocialRecordsFromPeople, syncPersonAge } from "./person";
+import {
+  getDatingRoseStateForYear,
+  getDefaultDatingPreferences,
+  getDefaultRelationshipPreferences,
+  syncLinkedSocialRecordsFromPeople,
+  syncPersonAge,
+} from "./person";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
 import type { Classmate, DatingProfile, Friend } from "../types/relationships";
@@ -62,19 +68,34 @@ const hydrateFriend = (friend: Friend): Friend => {
   };
 };
 
-const hydrateDatingProfile = (profile: DatingProfile): DatingProfile => {
+const hydrateDatingProfile = (
+  profile: DatingProfile,
+  currentYear: number
+): DatingProfile => {
   const personId = profile.personId ?? null;
+  const birthYear =
+    typeof profile.birthYear === "number"
+      ? profile.birthYear
+      : typeof profile.age === "number"
+        ? currentYear - profile.age
+        : currentYear - 18;
   const matchChanceRandomness =
     typeof profile.matchChanceRandomness === "number"
       ? profile.matchChanceRandomness
       : randomInt(-6, 6);
+  const roseMatchBoost =
+    typeof profile.roseMatchBoost === "number"
+      ? profile.roseMatchBoost
+      : randomInt(10, 30);
   const datingCharacteristics = Array.isArray(profile.datingCharacteristics)
     ? profile.datingCharacteristics
     : [];
 
   if (
     profile.personId === personId &&
+    profile.birthYear === birthYear &&
     profile.matchChanceRandomness === matchChanceRandomness &&
+    profile.roseMatchBoost === roseMatchBoost &&
     profile.datingCharacteristics === datingCharacteristics
   ) {
     return profile;
@@ -83,7 +104,9 @@ const hydrateDatingProfile = (profile: DatingProfile): DatingProfile => {
   return {
     ...profile,
     personId,
+    birthYear,
     matchChanceRandomness,
+    roseMatchBoost,
     datingCharacteristics,
   };
 };
@@ -114,10 +137,13 @@ const hydrateFriends = (friends: Friend[]) => {
   return changed ? nextFriends : friends;
 };
 
-const hydrateDatingProfiles = (profiles: DatingProfile[]) => {
+const hydrateDatingProfiles = (
+  profiles: DatingProfile[],
+  currentYear: number
+) => {
   let changed = false;
   const nextProfiles = profiles.map((profile) => {
-    const hydratedProfile = hydrateDatingProfile(profile);
+    const hydratedProfile = hydrateDatingProfile(profile, currentYear);
     if (hydratedProfile !== profile) {
       changed = true;
     }
@@ -197,6 +223,46 @@ const hydrateCharacter = (
     typeof character.datingRefreshesRemaining === "number"
       ? character.datingRefreshesRemaining
       : 2;
+  const datingPreferences =
+    character.datingPreferences &&
+    isFiniteNumber(character.datingPreferences.minimumAge) &&
+    isFiniteNumber(character.datingPreferences.maximumAge) &&
+    (character.datingPreferences.gender === "Male" ||
+      character.datingPreferences.gender === "Female" ||
+      character.datingPreferences.gender === "Both")
+      ? {
+          minimumAge: Math.max(
+            18,
+            Math.min(
+              character.datingPreferences.minimumAge,
+              character.datingPreferences.maximumAge
+            )
+          ),
+          maximumAge: Math.max(
+            18,
+            Math.max(
+              character.datingPreferences.minimumAge,
+              character.datingPreferences.maximumAge
+            )
+          ),
+          gender: character.datingPreferences.gender,
+        }
+      : getDefaultDatingPreferences(character, currentYear);
+  const datingRoseState =
+    character.datingRoseState &&
+    isFiniteNumber(character.datingRoseState.year) &&
+    isFiniteNumber(character.datingRoseState.remaining)
+      ? getDatingRoseStateForYear(
+          {
+            year: character.datingRoseState.year,
+            remaining: Math.max(0, Math.min(3, character.datingRoseState.remaining)),
+          },
+          currentYear
+        )
+      : {
+          year: currentYear,
+          remaining: 3,
+        };
   const relationshipScores = isRecord(character.relationshipScores)
     ? character.relationshipScores
     : {};
@@ -220,11 +286,25 @@ const hydrateCharacter = (
   )
     ? character.recentRelationshipLifeEvents
     : [];
-  const datingProfiles = Array.isArray(character.datingProfiles)
-    ? hydrateDatingProfiles(character.datingProfiles)
-    : [];
+  const datingCandidatePool =
+    character.datingCandidatePool &&
+    isFiniteNumber(character.datingCandidatePool.year) &&
+    Array.isArray(character.datingCandidatePool.profiles)
+      ? {
+          year: character.datingCandidatePool.year,
+          profiles: hydrateDatingProfiles(character.datingCandidatePool.profiles, currentYear),
+        }
+      : {
+          year: currentYear,
+          profiles: Array.isArray((character as Record<string, unknown>).datingProfiles)
+            ? hydrateDatingProfiles(
+                (character as Record<string, unknown>).datingProfiles as DatingProfile[],
+                currentYear
+              )
+            : [],
+        };
   const datingMatches = Array.isArray(character.datingMatches)
-    ? hydrateDatingProfiles(character.datingMatches)
+    ? hydrateDatingProfiles(character.datingMatches, currentYear)
     : [];
   const datingDiscoveryState =
     character.datingDiscoveryState &&
@@ -245,20 +325,25 @@ const hydrateCharacter = (
           viewedProfileIds: [],
           passedProfileIds: [],
         };
-  const partner = character.partner ? hydrateDatingProfile(character.partner) : null;
+  const partner = character.partner
+    ? hydrateDatingProfile(character.partner, currentYear)
+    : null;
   const syncedCharacter = syncPersonAge(
     {
       ...character,
       birthYear,
+      genderPreference: datingPreferences.gender,
       individualReputation,
       traitHistory,
       aspirations,
       death,
       skills,
       careerHistory,
+      datingPreferences,
       fullTimeJobListings,
       partTimeJobListings,
       jobRefreshesRemaining,
+      datingRoseState,
       datingRefreshesRemaining,
       relationshipScores,
       memories,
@@ -266,7 +351,7 @@ const hydrateCharacter = (
       relationshipPreferences,
       recentRelationshipLifeEvents,
       romanticRelationships,
-      datingProfiles,
+      datingCandidatePool,
       datingMatches,
       datingDiscoveryState,
       partner,
@@ -283,6 +368,7 @@ const hydrateCharacter = (
   if (
     character.birthYear === birthYear &&
     character.age === resolvedCharacter.age &&
+    character.genderPreference === resolvedCharacter.genderPreference &&
     character.academicPerformanceProfile === academicPerformanceProfile &&
     character.academicPerformanceScore === academicPerformanceScore &&
     character.studySessionsUsedThisYear === studySessionsUsedThisYear &&
@@ -298,6 +384,8 @@ const hydrateCharacter = (
     character.fullTimeJobListings === fullTimeJobListings &&
     character.partTimeJobListings === partTimeJobListings &&
     character.jobRefreshesRemaining === jobRefreshesRemaining &&
+    character.datingPreferences === datingPreferences &&
+    character.datingRoseState === datingRoseState &&
     character.datingRefreshesRemaining === datingRefreshesRemaining &&
     character.relationshipScores === relationshipScores &&
     character.memories === memories &&
@@ -305,7 +393,7 @@ const hydrateCharacter = (
     character.relationshipPreferences === relationshipPreferences &&
     character.recentRelationshipLifeEvents === recentRelationshipLifeEvents &&
     character.romanticRelationships === romanticRelationships &&
-    character.datingProfiles === resolvedCharacter.datingProfiles &&
+    character.datingCandidatePool === resolvedCharacter.datingCandidatePool &&
     character.datingMatches === resolvedCharacter.datingMatches &&
     character.datingDiscoveryState === datingDiscoveryState &&
     character.partner === resolvedCharacter.partner
@@ -327,9 +415,11 @@ const hydrateCharacter = (
     death,
     skills,
     careerHistory,
+    datingPreferences,
     fullTimeJobListings,
     partTimeJobListings,
     jobRefreshesRemaining,
+    datingRoseState,
     datingRefreshesRemaining,
     relationshipScores,
     memories,
@@ -337,7 +427,7 @@ const hydrateCharacter = (
     relationshipPreferences,
     recentRelationshipLifeEvents,
     romanticRelationships,
-    datingProfiles: resolvedCharacter.datingProfiles,
+    datingCandidatePool: resolvedCharacter.datingCandidatePool,
     datingMatches: resolvedCharacter.datingMatches,
     datingDiscoveryState,
     partner: resolvedCharacter.partner,

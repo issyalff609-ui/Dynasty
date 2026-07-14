@@ -148,6 +148,22 @@ export type DatingDiscoveryState = {
   passedProfileIds: string[];
 };
 
+export type DatingPreferences = {
+  minimumAge: number;
+  maximumAge: number;
+  gender: Preference;
+};
+
+export type DatingRoseState = {
+  year: number;
+  remaining: number;
+};
+
+export type DatingCandidatePool = {
+  year: number;
+  profiles: DatingProfile[];
+};
+
 export type RecentRelationshipLifeEventType =
   | "death_of_parent"
   | "job_loss"
@@ -206,11 +222,13 @@ export type Person = {
   pendingUniversityDegree: Degree | null;
   universityYearsRemaining: number;
   genderPreference: Preference;
-  datingProfiles: DatingProfile[];
+  datingPreferences: DatingPreferences;
+  datingCandidatePool: DatingCandidatePool;
   datingMatches: DatingProfile[];
   datingDiscoveryState: DatingDiscoveryState;
   romanticRelationships: RomanticRelationship[];
   partner: DatingProfile | null;
+  datingRoseState: DatingRoseState;
   datingRefreshesRemaining: number;
   fullTimeJobListings: FullTimeJobListing[];
   partTimeJobListings: PartTimeJobListing[];

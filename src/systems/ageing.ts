@@ -301,6 +301,19 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
     fullTimeJobListings: generateFullTimeJobListings(character),
     partTimeJobListings: [],
     jobRefreshesRemaining: 3,
+    datingCandidatePool: {
+      year: currentHousehold.currentYear + 1,
+      profiles: [],
+    },
+    datingDiscoveryState: {
+      year: currentHousehold.currentYear + 1,
+      viewedProfileIds: [],
+      passedProfileIds: [],
+    },
+    datingRoseState: {
+      year: currentHousehold.currentYear + 1,
+      remaining: 3,
+    },
     datingRefreshesRemaining: 2,
   }));
   const syncedCharacters = refreshedCharacters.map((character) =>

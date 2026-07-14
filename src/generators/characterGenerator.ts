@@ -134,7 +134,15 @@ export const createCharacter = (
     pendingUniversityDegree: null,
     universityYearsRemaining: 0,
     genderPreference: "Both",
-    datingProfiles: [],
+    datingPreferences: {
+      minimumAge: Math.max(18, age - 5),
+      maximumAge: Math.max(18, Math.min(90, age + 5)),
+      gender: "Both",
+    },
+    datingCandidatePool: {
+      year: currentYear,
+      profiles: [],
+    },
     datingMatches: [],
     datingDiscoveryState: {
       year: currentYear,
@@ -143,6 +151,10 @@ export const createCharacter = (
     },
     romanticRelationships: [],
     partner: null,
+    datingRoseState: {
+      year: currentYear,
+      remaining: 3,
+    },
     datingRefreshesRemaining: 2,
     fullTimeJobListings: [],
     partTimeJobListings: [],

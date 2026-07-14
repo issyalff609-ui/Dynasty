@@ -99,7 +99,8 @@ export type DatingProfile = {
   firstName: string;
   lastName: string;
   gender: Gender;
-  age: number;
+  birthYear: number;
+  age?: number;
   race: Race;
   appearance: number;
   intelligence: number;
@@ -116,6 +117,7 @@ export type DatingProfile = {
   friendshipScore: number;
   romanceScore: number;
   matchChanceRandomness: number;
+  roseMatchBoost: number;
   datingCharacteristics: DatingCharacteristicPreference[];
 };
 

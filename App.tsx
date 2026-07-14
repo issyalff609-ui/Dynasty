@@ -14,12 +14,15 @@ import { SectionCard } from "./src/components/SectionCard";
 import { StatBar } from "./src/components/StatBar";
 import {
   MAXIMUM_DATING_AGE,
-  MINIMUM_DATING_AGE,
   PARTNER_DATE_ACTIVITIES,
-  getDefaultDatingAgeFilter,
   type DatingAgeFilter,
 } from "./src/data/dating";
 import { CareerPanel } from "./src/screens/CareerPanel";
+import { DatingDiscoverScreen } from "./src/screens/dating/DatingDiscoverScreen";
+import { DatingMatchDetailsScreen } from "./src/screens/dating/DatingMatchDetailsScreen";
+import { DatingMatchesScreen } from "./src/screens/dating/DatingMatchesScreen";
+import { DatingPreferencesScreen } from "./src/screens/dating/DatingPreferencesScreen";
+import { DatingProfileScreen } from "./src/screens/dating/DatingProfileScreen";
 import { EducationPanel } from "./src/screens/EducationPanel";
 import { APP_VERSION } from "./src/data/version";
 import {
@@ -68,18 +71,36 @@ import {
   getStudyGain,
 } from "./src/systems/education";
 import {
-  applyDatingInteraction,
-  calculateChemistryScore,
   calculateDatingScore,
-  generateDatingProfiles,
-  getDatingInteractionChance,
+  getDatingProfileAge,
   getDatingScoreBreakdown,
-  generateDatingCharacteristics,
   getIndividualMatchChance,
   getIndividualMatchChanceBreakdown,
   getPartnerAcceptanceChance,
   getRoseMatchChance,
 } from "./src/systems/dating";
+import {
+  resolveDatingDiscoverAction,
+  resolveDatingMatchTextInteraction,
+  type DatingDiscoverActionResult,
+} from "./src/systems/datingActions";
+import {
+  adjustDatingMinimumAge,
+  ANNUAL_DATING_DISCOVER_LIMIT,
+  buildAdditionalDatingProfilesForRefresh,
+  createDatingDiscoveryState,
+  DATING_APP_ACCESS_DENIED_MESSAGE,
+  decreaseDatingMaximumAge,
+  extendDatingCandidatePoolForDiscover,
+  getDatingAgeFilterFromPreferences,
+  getDatingCandidatePoolForYear,
+  getDatingDiscoveryStateForYear,
+  getEligibleDatingProfilesForDisplay,
+  getEmptyDatingCandidatePool,
+  increaseDatingMaximumAge,
+  increaseDatingMinimumAge,
+  prepareDatingDiscoverCharacter,
+} from "./src/systems/datingDiscovery";
 import {
   calculateProgressiveTax,
   getTaxBrackets,
@@ -94,6 +115,8 @@ import {
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
 import {
+  getDatingRoseStateForYear,
+  getDefaultDatingPreferences,
   getPersonAge,
   promoteNpcToPerson,
 } from "./src/systems/person";
@@ -106,12 +129,16 @@ import {
   askPartnerForSpace,
   bickerWithPartner,
   breakUpOrDivorcePartner,
+  buildMirroredPartnerProfile,
   buildFriendFromClassmate,
+  endRelationship,
+  getActiveRomanticRelationship,
   getAvailablePartnerConflictIssues,
   getAvailablePartnerConversationTopics,
   getActiveRomanticRelationshipBetween,
   haveConversationAbout,
   goOnDate,
+  goOnDateWithMatch,
   getRelationshipLabel,
   proposeToPartner,
   spendTimeTogether,
@@ -220,32 +247,17 @@ type AppScreen =
   | "datingAppMatchDetails"
   | "datingAppMatches";
 
-const isDatingProfileEligible = (
-  profile: DatingProfile,
-  ageFilter: DatingAgeFilter,
-  genderFilter: Preference
-) =>
-  profile.age >= ageFilter.minimumAge &&
-  profile.age <= ageFilter.maximumAge &&
-  matchesGenderPreference(profile.gender, genderFilter);
-
-const matchesGenderPreference = (
-  profileGender: DatingProfile["gender"],
-  preference: Preference
-) =>
-  preference === "Both" || profileGender === preference;
-
-const ANNUAL_DATING_DISCOVER_LIMIT = 20;
-
-const createDatingDiscoveryState = (year: number) => ({
-  year,
-  viewedProfileIds: [] as string[],
-  passedProfileIds: [] as string[],
-});
+const isDatingAppScreen = (screen: AppScreen) =>
+  screen === "datingApp" ||
+  screen === "datingAppPreferences" ||
+  screen === "datingAppDiscover" ||
+  screen === "datingAppMatchDetails" ||
+  screen === "datingAppMatches";
 
 export default function App() {
   const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
-  const datingAgeFilterCharacterIdRef = useRef<string | null>(null);
+  const datingPreferencesDraftCharacterIdRef = useRef<string | null>(null);
+  const processingDatingProfileIdRef = useRef<string | null>(null);
   if (initialLoadRef.current === null) {
     initialLoadRef.current = loadOrCreateHousehold(buildHousehold);
   }
@@ -273,15 +285,18 @@ export default function App() {
   const [datingAppVisible, setDatingAppVisible] = useState(false);
   const [partnerVisible, setPartnerVisible] = useState(false);
   const [selectedDatingMatchId, setSelectedDatingMatchId] = useState<string | null>(null);
+  const [activeDatingProfileId, setActiveDatingProfileId] = useState<string | null>(null);
+  const [datingActionInProgress, setDatingActionInProgress] = useState(false);
   const [datingAgeFilter, setDatingAgeFilter] = useState<DatingAgeFilter | null>(null);
-  const [datingGenderFilter, setDatingGenderFilter] = useState<Preference>("Both");
+  const [datingGenderFilter, setDatingGenderFilter] = useState<Preference | null>(null);
   const [datingScoreInfoVisible, setDatingScoreInfoVisible] = useState(false);
   const [datingMatchesVisible, setDatingMatchesVisible] = useState(false);
   const [matchChanceBreakdownVisible, setMatchChanceBreakdownVisible] = useState(false);
-  const [roseBoostByProfileId, setRoseBoostByProfileId] = useState<Record<string, number>>({});
-  const [datingRosesRemaining, setDatingRosesRemaining] = useState(3);
   const [datingAppSettingsVisible, setDatingAppSettingsVisible] = useState(false);
-  const [datingEngineerViewVisible, setDatingEngineerViewVisible] = useState(false);
+  const [discoverEngineerViewVisible, setDiscoverEngineerViewVisible] = useState(false);
+  const [matchDetailsEngineerViewVisible, setMatchDetailsEngineerViewVisible] =
+    useState(false);
+  const [matchGoOnDateVisible, setMatchGoOnDateVisible] = useState(false);
   const [lookForJobsVisible, setLookForJobsVisible] = useState(false);
   const [fullTimeJobsVisible, setFullTimeJobsVisible] = useState(false);
   const [partTimeJobsVisible, setPartTimeJobsVisible] = useState(false);
@@ -349,6 +364,14 @@ export default function App() {
     household.country
   );
   const currentCharacterAge = getPersonAge(currentCharacter, household.currentYear);
+  const canAccessDatingApp = currentCharacterAge >= 18;
+  const currentDatingPreferences =
+    currentCharacter.datingPreferences ??
+    getDefaultDatingPreferences(currentCharacter, household.currentYear);
+  const currentDatingRoseState = useMemo(
+    () => getDatingRoseStateForYear(currentCharacter.datingRoseState, household.currentYear),
+    [currentCharacter.datingRoseState, household.currentYear]
+  );
   const currentAcademicPerformance = getAcademicPerformance(currentCharacter);
   const currentCVScore = calculateCVScore(
     currentCharacter,
@@ -396,31 +419,30 @@ export default function App() {
     () => getTaxBrackets(household.country),
     [household.country]
   );
-  const currentDatingProfile = currentCharacter.datingProfiles[0] ?? null;
   const activeDatingMatches = currentCharacter.datingMatches;
   const datingMatchLimitReached = activeDatingMatches.length >= 7;
-  const currentProfileMatchChance = currentDatingProfile
-    ? getIndividualMatchChance(currentCharacter, currentDatingProfile, household.reputation)
-    : 0;
-  const currentRoseBoost =
-    currentDatingProfile
-      ? roseBoostByProfileId[currentDatingProfile.id] ?? 20
-      : 0;
-  const currentProfileRoseMatchChance = currentDatingProfile
-    ? getRoseMatchChance(currentProfileMatchChance, currentRoseBoost)
-    : 0;
-  const currentProfileChemistry = currentDatingProfile?.chemistry ?? null;
-  const currentMatchChanceBreakdown = currentDatingProfile
-    ? getIndividualMatchChanceBreakdown(
-        currentCharacter,
-        currentDatingProfile,
-        household.reputation
-      )
-    : null;
-  const resolvedDatingAgeFilter = useMemo(
-    () => datingAgeFilter ?? getDefaultDatingAgeFilter(currentCharacterAge),
-    [currentCharacterAge, datingAgeFilter]
+  const currentDatingDiscoveryState = useMemo(() => {
+    if (currentCharacter.datingDiscoveryState.year === household.currentYear) {
+      return currentCharacter.datingDiscoveryState;
+    }
+
+    return createDatingDiscoveryState(household.currentYear);
+  }, [currentCharacter.datingDiscoveryState, household.currentYear]);
+  const currentDatingCandidatePool = useMemo(
+    () =>
+      currentCharacter.datingCandidatePool.year === household.currentYear
+        ? currentCharacter.datingCandidatePool
+        : getEmptyDatingCandidatePool(household.currentYear),
+    [currentCharacter.datingCandidatePool, household.currentYear]
   );
+  const resolvedDatingAgeFilter = useMemo(
+    () =>
+      datingAgeFilter ??
+      getDatingAgeFilterFromPreferences(currentDatingPreferences),
+    [currentDatingPreferences, datingAgeFilter]
+  );
+  const resolvedDatingGenderFilter =
+    datingGenderFilter ?? currentDatingPreferences.gender;
   const currentDatingAgeFilterLabel = useMemo(
     () =>
       `${resolvedDatingAgeFilter.minimumAge}-${formatDatingAgeLabel(
@@ -428,6 +450,48 @@ export default function App() {
       )}`,
     [resolvedDatingAgeFilter]
   );
+  const currentEligibleDatingProfiles = useMemo(
+    () =>
+      getEligibleDatingProfilesForDisplay({
+        character: currentCharacter,
+        candidatePool: currentDatingCandidatePool,
+        datingPreferences: currentDatingPreferences,
+        currentYear: household.currentYear,
+      }),
+    [currentCharacter, currentDatingCandidatePool, currentDatingPreferences, household.currentYear]
+  );
+  const currentDatingProfile = useMemo(
+    () =>
+      activeDatingProfileId === null
+        ? null
+        : currentDatingCandidatePool.profiles.find(
+            (profile) => profile.id === activeDatingProfileId
+          ) ?? null,
+    [currentDatingCandidatePool.profiles, activeDatingProfileId]
+  );
+  const currentProfileMatchChance = currentDatingProfile
+    ? getIndividualMatchChance(
+        currentCharacter,
+        currentDatingProfile,
+        household.reputation,
+        household.currentYear
+      )
+    : 0;
+  const currentProfileRoseMatchChance = currentDatingProfile
+    ? getRoseMatchChance(
+        currentProfileMatchChance,
+        currentDatingProfile.roseMatchBoost
+      )
+    : 0;
+  const currentProfileChemistry = currentDatingProfile?.chemistry ?? null;
+  const currentMatchChanceBreakdown = currentDatingProfile
+    ? getIndividualMatchChanceBreakdown(
+        currentCharacter,
+        currentDatingProfile,
+        household.reputation,
+        household.currentYear
+      )
+    : null;
   const updateCurrentCharacter = (
     updater: (character: Character) => Character
   ) => {
@@ -451,80 +515,150 @@ export default function App() {
   const selectedDatingMatchChance = useMemo(
     () =>
       selectedDatingMatch
-        ? getIndividualMatchChance(currentCharacter, selectedDatingMatch, household.reputation)
+        ? getIndividualMatchChance(
+            currentCharacter,
+            selectedDatingMatch,
+            household.reputation,
+            household.currentYear
+          )
         : 0,
-    [currentCharacter, household.reputation, selectedDatingMatch]
+    [currentCharacter, household.currentYear, household.reputation, selectedDatingMatch]
   );
   const selectedDatingMatchRoseChance = useMemo(
     () =>
       selectedDatingMatch
         ? getRoseMatchChance(
             selectedDatingMatchChance,
-            roseBoostByProfileId[selectedDatingMatch.id] ?? 20
+            selectedDatingMatch.roseMatchBoost
           )
         : 0,
-    [roseBoostByProfileId, selectedDatingMatch, selectedDatingMatchChance]
+    [selectedDatingMatch, selectedDatingMatchChance]
   );
-  const currentDatingDiscoveryState = useMemo(() => {
-    if (currentCharacter.datingDiscoveryState.year === household.currentYear) {
-      return currentCharacter.datingDiscoveryState;
-    }
+  const matchAgesById = useMemo(
+    () =>
+      Object.fromEntries(
+        activeDatingMatches.map((match) => [
+          match.id,
+          getDatingProfileAge(match, household.currentYear),
+        ])
+      ),
+    [activeDatingMatches, household.currentYear]
+  );
 
-    return createDatingDiscoveryState(household.currentYear);
-  }, [currentCharacter.datingDiscoveryState, household.currentYear]);
   useEffect(() => {
-    setDatingGenderFilter(currentCharacter.genderPreference);
-  }, [currentCharacter.id, currentCharacter.genderPreference]);
-
-  useEffect(() => {
-    if (datingAgeFilterCharacterIdRef.current === currentCharacter.id) {
+    if (currentScreen !== "datingAppPreferences") {
+      datingPreferencesDraftCharacterIdRef.current = null;
+      setDatingAgeFilter(null);
+      setDatingGenderFilter(null);
       return;
     }
 
-    datingAgeFilterCharacterIdRef.current = currentCharacter.id;
-    setDatingAgeFilter(getDefaultDatingAgeFilter(currentCharacterAge));
-    setDatingRosesRemaining(3);
+    if (datingPreferencesDraftCharacterIdRef.current === currentCharacter.id) {
+      return;
+    }
+
+    datingPreferencesDraftCharacterIdRef.current = currentCharacter.id;
+    setDatingAgeFilter(getDatingAgeFilterFromPreferences(currentDatingPreferences));
+    setDatingGenderFilter(currentDatingPreferences.gender);
     setDatingAppSettingsVisible(false);
-    setDatingEngineerViewVisible(false);
-  }, [currentCharacter.id, currentCharacterAge]);
+    setDiscoverEngineerViewVisible(false);
+  }, [currentCharacter.id, currentDatingPreferences, currentScreen]);
 
   useEffect(() => {
-    if (!currentDatingProfile) {
+    if (canAccessDatingApp) {
       return;
     }
 
-    setRoseBoostByProfileId((current) =>
-      current[currentDatingProfile.id]
-        ? current
-        : {
-            ...current,
-            [currentDatingProfile.id]: randomInt(10, 30),
-        }
-    );
-  }, [currentDatingProfile]);
+    setDatingAppVisible(false);
+    setDatingAppSettingsVisible(false);
+    setDiscoverEngineerViewVisible(false);
+    setDatingMatchesVisible(false);
+    setDatingScoreInfoVisible(false);
+    setMatchChanceBreakdownVisible(false);
+    setSelectedDatingMatchId(null);
+
+    if (!isDatingAppScreen(currentScreen)) {
+      return;
+    }
+
+    Alert.alert("Romance", DATING_APP_ACCESS_DENIED_MESSAGE);
+    setCurrentScreen("romance");
+  }, [canAccessDatingApp, currentScreen]);
+
+  const ensureDatingAppAccess = () => {
+    if (canAccessDatingApp) {
+      return true;
+    }
+
+    Alert.alert("Romance", DATING_APP_ACCESS_DENIED_MESSAGE);
+    return false;
+  };
+
+  const buildSavedDatingPreferences = (): Character["datingPreferences"] => ({
+    minimumAge: resolvedDatingAgeFilter.minimumAge,
+    maximumAge: resolvedDatingAgeFilter.maximumAge,
+    gender: resolvedDatingGenderFilter,
+  });
+  const datingDiscoverVisible =
+    currentScreen === "datingAppDiscover" || datingAppVisible;
+
   useEffect(() => {
-    if (currentScreen !== "datingAppDiscover" || !currentDatingProfile) {
+    if (!datingDiscoverVisible) {
+      setActiveDatingProfileId(null);
+      return;
+    }
+
+    if (activeDatingProfileId !== null && currentDatingProfile !== null) {
+      return;
+    }
+
+    setActiveDatingProfileId(currentEligibleDatingProfiles[0]?.id ?? null);
+  }, [
+    activeDatingProfileId,
+    currentDatingProfile,
+    currentEligibleDatingProfiles,
+    datingDiscoverVisible,
+  ]);
+
+  useEffect(() => {
+    if (currentScreen === "datingAppMatchDetails") {
+      return;
+    }
+
+    setMatchDetailsEngineerViewVisible(false);
+    setMatchGoOnDateVisible(false);
+  }, [currentScreen]);
+
+  useEffect(() => {
+    if (!datingDiscoverVisible || !currentDatingProfile) {
       return;
     }
 
     updateCurrentCharacter((character) => {
-      const discoveryState = getDatingDiscoveryStateForYear(character);
+      const discoveryState = getDatingDiscoveryStateForYear(
+        character,
+        household.currentYear
+      );
       if (discoveryState.viewedProfileIds.includes(currentDatingProfile.id)) {
         return character;
       }
 
-      return {
-        ...character,
-        datingDiscoveryState: {
-          ...discoveryState,
-          viewedProfileIds: [
-            ...discoveryState.viewedProfileIds,
-            currentDatingProfile.id,
-          ],
+      return prepareDatingDiscoverCharacter({
+        character: {
+          ...character,
+          datingDiscoveryState: {
+            ...discoveryState,
+            viewedProfileIds: [
+              ...discoveryState.viewedProfileIds,
+              currentDatingProfile.id,
+            ],
+          },
         },
-      };
+        country: household.country,
+        currentYear: household.currentYear,
+      });
     });
-  }, [currentDatingProfile, currentScreen]);
+  }, [currentDatingProfile, datingDiscoverVisible, household.country, household.currentYear]);
   const partnerCharacter = useMemo(
     () =>
       currentCharacter.partner?.personId
@@ -615,110 +749,26 @@ export default function App() {
     };
   }, [household.country]);
 
-  const getDatingDiscoveryStateForYear = (character: Character) =>
-    character.datingDiscoveryState.year === household.currentYear
-      ? character.datingDiscoveryState
-      : createDatingDiscoveryState(household.currentYear);
-
-  const getUnseenEligibleDatingProfiles = (
-    profiles: DatingProfile[],
-    discoveryState: Character["datingDiscoveryState"]
-  ) =>
-    profiles.filter(
-      (profile) =>
-        isDatingProfileEligible(
-          profile,
-          resolvedDatingAgeFilter,
-          datingGenderFilter
-        ) &&
-        !discoveryState.viewedProfileIds.includes(profile.id) &&
-        !discoveryState.passedProfileIds.includes(profile.id)
-    );
-
-  const buildDatingDiscoverQueue = (
-    character: Character,
-    discoveryState: Character["datingDiscoveryState"],
-    profiles: DatingProfile[]
-  ) => {
-    if (discoveryState.viewedProfileIds.length >= ANNUAL_DATING_DISCOVER_LIMIT) {
-      return [];
-    }
-
-    const eligibleProfiles = getUnseenEligibleDatingProfiles(profiles, discoveryState);
-    if (eligibleProfiles.length > 0) {
-      return eligibleProfiles;
-    }
-
-    const generatedProfiles = generateDatingProfiles(
-      character,
-      household.country,
-      resolvedDatingAgeFilter,
-      datingGenderFilter,
-      profiles,
-      createCharacter,
-      assignJobToCharacter,
-      pickDegreeForJob,
-      household.currentYear
-    );
-
-    return getUnseenEligibleDatingProfiles(generatedProfiles, discoveryState);
-  };
-
-  const prepareDatingDiscoverCharacter = (character: Character) => {
-    const discoveryState = getDatingDiscoveryStateForYear(character);
-    return {
-      ...character,
-      genderPreference: datingGenderFilter,
-      datingDiscoveryState: discoveryState,
-      datingProfiles: buildDatingDiscoverQueue(
-        character,
-        discoveryState,
-        character.datingProfiles
-      ),
-    };
-  };
-
-  const advanceDatingDiscoverQueue = (
-    character: Character,
-    currentProfileId: string | null,
-    options?: { markPassed?: boolean }
-  ) => {
-    const discoveryState = getDatingDiscoveryStateForYear(character);
-    const nextViewedProfileIds =
-      currentProfileId === null || discoveryState.viewedProfileIds.includes(currentProfileId)
-        ? discoveryState.viewedProfileIds
-        : [...discoveryState.viewedProfileIds, currentProfileId];
-    const nextPassedProfileIds =
-      options?.markPassed && currentProfileId !== null
-        ? discoveryState.passedProfileIds.includes(currentProfileId)
-          ? discoveryState.passedProfileIds
-          : [...discoveryState.passedProfileIds, currentProfileId]
-        : discoveryState.passedProfileIds;
-    const nextDiscoveryState = {
-      year: discoveryState.year,
-      viewedProfileIds: nextViewedProfileIds,
-      passedProfileIds: nextPassedProfileIds,
-    };
-    const remainingProfiles = character.datingProfiles.filter(
-      (profile) => profile.id !== currentProfileId
-    );
-
-    return {
-      ...character,
-      datingDiscoveryState: nextDiscoveryState,
-      datingProfiles: buildDatingDiscoverQueue(
-        character,
-        nextDiscoveryState,
-        remainingProfiles
-      ),
-    };
-  };
-
   const openDatingDiscover = () => {
+    if (!ensureDatingAppAccess()) {
+      return;
+    }
+
+    const nextDatingPreferences = buildSavedDatingPreferences();
+    setActiveDatingProfileId(null);
     setCurrentScreen("datingAppDiscover");
     setHousehold((currentHousehold) => {
       const currentCharacter = getCurrentHouseholdCharacter(currentHousehold);
-      const updatedCharacter = prepareDatingDiscoverCharacter(currentCharacter);
+      const updatedCharacter = prepareDatingDiscoverCharacter({
+        character: {
+          ...currentCharacter,
+          genderPreference: nextDatingPreferences.gender,
+          datingPreferences: nextDatingPreferences,
+        },
+        country: currentHousehold.country,
+        currentYear: currentHousehold.currentYear,
+        datingPreferences: nextDatingPreferences,
+      });
 
       return {
         ...currentHousehold,
@@ -730,7 +780,7 @@ export default function App() {
       };
     });
     setDatingAppSettingsVisible(false);
-    setDatingEngineerViewVisible(false);
+    setDiscoverEngineerViewVisible(false);
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
@@ -741,80 +791,65 @@ export default function App() {
       return;
     }
 
-    if (action === "pass") {
-      updateCurrentCharacter((character) =>
-        advanceDatingDiscoverQueue(character, currentDatingProfile.id, {
-          markPassed: true,
-        })
-      );
-      setMatchChanceBreakdownVisible(false);
+    if (processingDatingProfileIdRef.current === currentDatingProfile.id) {
       return;
     }
 
-    if (datingMatchLimitReached) {
-      return;
-    }
+    processingDatingProfileIdRef.current = currentDatingProfile.id;
+    setDatingActionInProgress(true);
 
-    if (action === "rose") {
-      setDatingRosesRemaining((current) => Math.max(0, current - 1));
-    }
-
-    const roseBoost =
-      action === "rose"
-        ? roseBoostByProfileId[currentDatingProfile.id] ?? randomInt(10, 30)
-        : 0;
-    const matchChance =
-      action === "rose"
-        ? getRoseMatchChance(currentProfileMatchChance, roseBoost)
-        : currentProfileMatchChance;
-    const accepted = Math.random() * 100 < matchChance;
+    let actionResult: DatingDiscoverActionResult | null = null;
+    let resolvedProfileFirstName = currentDatingProfile.firstName;
 
     updateCurrentCharacter((character) => {
-      if (character.datingMatches.length >= 7) {
-        return character;
-      }
+      const resolution = resolveDatingDiscoverAction({
+        character,
+        currentProfileId: currentDatingProfile.id,
+        action,
+        currentYear: household.currentYear,
+        reputation: household.reputation,
+        country: household.country,
+      });
 
-      const profile = character.datingProfiles.find(
-        (item) => item.id === currentDatingProfile.id
-      );
-      if (!profile) {
-        return character;
-      }
+      actionResult = resolution.result;
+      resolvedProfileFirstName = resolution.resolvedProfileFirstName;
 
-      if (!accepted) {
-        return advanceDatingDiscoverQueue(character, currentDatingProfile.id);
-      }
-
-      const matchedProfile: DatingProfile = {
-        ...profile,
-        matched: true,
-        datingCharacteristics:
-          profile.datingCharacteristics.length === 3
-            ? profile.datingCharacteristics
-            : generateDatingCharacteristics(),
-      };
-
-      if (character.datingMatches.some((item) => item.id === matchedProfile.id)) {
-        return advanceDatingDiscoverQueue(character, currentDatingProfile.id);
-      }
-
-      return advanceDatingDiscoverQueue(
-        {
-          ...character,
-          datingMatches: [...character.datingMatches, matchedProfile],
-        },
-        currentDatingProfile.id
-      );
+      return resolution.character;
     });
 
-    setMatchChanceBreakdownVisible(false);
+    const resolvedActionResult = (
+      actionResult ?? "profile_missing"
+    ) as DatingDiscoverActionResult;
 
-    Alert.alert(
-      "Dating App",
-      accepted
-        ? `It's a match!\n\nYou and ${currentDatingProfile.firstName} liked each other.`
-        : "No reply.\n\nYou never heard back."
-    );
+    if (
+      resolvedActionResult === "passed" ||
+      resolvedActionResult === "matched" ||
+      resolvedActionResult === "rejected"
+    ) {
+      setActiveDatingProfileId(null);
+    }
+
+    if (resolvedActionResult !== "profile_missing") {
+      setMatchChanceBreakdownVisible(false);
+    }
+
+    if (resolvedActionResult === "matched") {
+      Alert.alert(
+        "Dating App",
+        `It's a match!\n\nYou and ${resolvedProfileFirstName} liked each other.`
+      );
+    } else if (resolvedActionResult === "rejected") {
+      Alert.alert("Dating App", "No reply.\n\nYou never heard back.");
+    } else if (resolvedActionResult === "limit_reached") {
+      Alert.alert("Dating App", "You already have 7 matches.");
+    } else if (resolvedActionResult === "profile_missing") {
+      Alert.alert("Dating App", "Profile unavailable.");
+    } else if (resolvedActionResult === "no_roses") {
+      Alert.alert("Dating App", "No roses remaining.");
+    }
+
+    processingDatingProfileIdRef.current = null;
+    setDatingActionInProgress(false);
   };
 
   const unmatchProfile = (matchId: string) => {
@@ -823,6 +858,283 @@ export default function App() {
       datingMatches: character.datingMatches.filter((match) => match.id !== matchId),
     }));
     setSelectedDatingMatchId(null);
+  };
+
+  const interactWithMatch = (matchId: string) => {
+    const resolution = resolveDatingMatchTextInteraction({
+      character: currentCharacter,
+      matchId,
+    });
+    if (!resolution) {
+      return;
+    }
+
+    updateCurrentCharacter(() => resolution.character);
+    Alert.alert(
+      "Romance",
+      resolution.accepted
+        ? "The conversation went well."
+        : "The conversation felt flat."
+    );
+  };
+
+  const goOnDateWithSelectedMatch = (category: PartnerDateCategory) => {
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter || selectedDatingMatchId === null) {
+        return currentHousehold;
+      }
+
+      const match = currentCharacter.datingMatches.find(
+        (item) => item.id === selectedDatingMatchId
+      );
+      if (!match || !match.matched) {
+        return currentHousehold;
+      }
+
+      const result = goOnDateWithMatch(currentCharacter, match, category);
+      if (!result.success) {
+        Alert.alert("Go on a Date", result.text);
+        return currentHousehold;
+      }
+
+      Alert.alert(
+        "Go on a Date",
+        `${result.result.text}\n\n${formatMoney(
+          result.result.costGBP,
+          currentHousehold.country
+        )}\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}`
+      );
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === currentCharacter.id
+            ? {
+                ...result.person,
+                datingMatches: result.person.datingMatches.map((currentMatch) =>
+                  currentMatch.id === result.match.id ? result.match : currentMatch
+                ),
+              }
+            : character
+        ),
+      };
+    });
+
+    setMatchGoOnDateVisible(false);
+  };
+
+  const confirmUnmatchProfile = (match: DatingProfile) => {
+    Alert.alert("Dating App", `Unmatch ${match.firstName}?`, [
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+      {
+        text: "Unmatch",
+        style: "destructive",
+        onPress: () => {
+          unmatchProfile(match.id);
+          setCurrentScreen("datingAppMatches");
+          setMatchDetailsEngineerViewVisible(false);
+          setMatchGoOnDateVisible(false);
+        },
+      },
+    ]);
+  };
+
+  const startRelationshipWithMatch = (matchId: string) => {
+    let relationshipAccepted = false;
+    let relationshipRejected = false;
+    let previousPartnerName: string | null = null;
+
+    setHousehold((currentHousehold) => {
+      const currentCharacter = currentHousehold.characters.find(
+        (character) => character.id === currentHousehold.currentCharacterId
+      );
+      if (!currentCharacter) {
+        return currentHousehold;
+      }
+
+      const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
+      if (!match) {
+        return currentHousehold;
+      }
+
+      const activeRelationship = getActiveRomanticRelationship(currentCharacter);
+      const originalPartnerId =
+        activeRelationship?.personId ?? currentCharacter.partner?.personId ?? null;
+      const originalPartner =
+        originalPartnerId === null
+          ? null
+          : currentHousehold.characters.find((character) => character.id === originalPartnerId) ??
+            null;
+      const acceptanceChance = getPartnerAcceptanceChance(match);
+      const accepted = Math.random() * 100 < acceptanceChance;
+
+      if (!accepted) {
+        relationshipRejected = true;
+        return {
+          ...currentHousehold,
+          characters: currentHousehold.characters.map((character) =>
+            character.id === currentHousehold.currentCharacterId
+              ? {
+                  ...character,
+                  datingMatches: character.datingMatches.map((item) =>
+                    item.id === matchId
+                      ? {
+                          ...item,
+                          romanceScore: clamp(item.romanceScore - 10, 0, 100),
+                        }
+                      : item
+                  ),
+                }
+              : character
+          ),
+        };
+      }
+
+      const promotion = promoteNpcToPerson(
+        {
+          personId: match.personId,
+          firstName: match.firstName,
+          lastName: match.lastName,
+          age: getDatingProfileAge(match, currentHousehold.currentYear),
+          birthYear: match.birthYear,
+          gender: match.gender,
+          race: match.race,
+          appearance: match.appearance,
+          intelligence: match.intelligence,
+          traits: match.traits,
+          job: match.job,
+          annualIncomeGBP: match.annualIncomeGBP,
+          careerCeiling: match.careerCeiling,
+          degree: match.degree,
+          universityYearsRemaining: 0,
+        },
+        currentHousehold.currentYear,
+        currentHousehold.characters
+      );
+      const promotedMatch = {
+        ...match,
+        personId: promotion.person.id,
+      };
+      const nextCharacters = promotion.created
+        ? [...currentHousehold.characters, promotion.person]
+        : currentHousehold.characters;
+      const persistentCurrentCharacter =
+        nextCharacters.find(
+          (character) => character.id === currentHousehold.currentCharacterId
+        ) ?? currentCharacter;
+      const persistentPartner =
+        nextCharacters.find((character) => character.id === promotion.person.id) ??
+        promotion.person;
+      let relationshipCurrentCharacter = persistentCurrentCharacter;
+      let relationshipPartner = persistentPartner;
+      let endedOriginalPartnerId: string | null = null;
+
+      if (originalPartner) {
+        const persistentOriginalPartner =
+          nextCharacters.find((character) => character.id === originalPartner.id) ??
+          originalPartner;
+        const [endedCurrentCharacter, endedOriginalPartner] = endRelationship(
+          persistentCurrentCharacter,
+          persistentOriginalPartner,
+          currentHousehold.currentYear,
+          "Breakup"
+        );
+
+        relationshipCurrentCharacter = {
+          ...endedCurrentCharacter,
+          partner: null,
+        };
+        relationshipPartner = {
+          ...endedOriginalPartner,
+          partner: null,
+        };
+        endedOriginalPartnerId = endedOriginalPartner.id;
+      }
+
+      const [datedCurrentCharacter, datedPartner] = startDating(
+        relationshipCurrentCharacter,
+        persistentPartner,
+        currentHousehold.currentYear
+      );
+      const updatedCurrentCharacter = {
+        ...datedCurrentCharacter,
+        partner: promotedMatch,
+        datingMatches: datedCurrentCharacter.datingMatches.filter((item) => item.id !== matchId),
+      };
+      const mirroredPartnerProfile = buildMirroredPartnerProfile(
+        datedPartner,
+        updatedCurrentCharacter
+      );
+      const updatedPartner = mirroredPartnerProfile
+        ? {
+            ...datedPartner,
+            partner: mirroredPartnerProfile,
+          }
+        : datedPartner;
+
+      relationshipAccepted = true;
+      previousPartnerName = originalPartner?.firstName ?? null;
+
+      return {
+        ...currentHousehold,
+        characters: nextCharacters.map((character) =>
+          character.id === updatedCurrentCharacter.id
+            ? updatedCurrentCharacter
+            : character.id === updatedPartner.id
+              ? updatedPartner
+              : endedOriginalPartnerId !== null && character.id === endedOriginalPartnerId
+                ? relationshipPartner
+                : character
+        ),
+      };
+    });
+
+    if (relationshipAccepted) {
+      Alert.alert(
+        "Romance",
+        previousPartnerName
+          ? `${previousPartnerName} has left you.`
+          : "Accepted."
+      );
+      goToRomancePartnerPage();
+      return;
+    }
+
+    if (relationshipRejected) {
+      Alert.alert("Romance", "Rejected.");
+    }
+  };
+
+  const askToBePartner = (matchId: string) => {
+    const activeRelationship = getActiveRomanticRelationship(currentCharacter);
+    const hasActivePartner =
+      currentCharacter.partner !== null || activeRelationship !== null;
+
+    if (!hasActivePartner) {
+      startRelationshipWithMatch(matchId);
+      return;
+    }
+
+    Alert.alert(
+      "Romance",
+      "You are currently in a relationship, are you sure you want to do this?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Continue",
+          onPress: () => startRelationshipWithMatch(matchId),
+        },
+      ]
+    );
   };
 
   const closeAllPanels = () => {
@@ -846,7 +1158,7 @@ export default function App() {
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
     setDatingAppSettingsVisible(false);
-    setDatingEngineerViewVisible(false);
+    setDiscoverEngineerViewVisible(false);
     setLookForJobsVisible(false);
     setFullTimeJobsVisible(false);
     setPartTimeJobsVisible(false);
@@ -872,6 +1184,14 @@ export default function App() {
     closeAllPanels();
     setSelectedDatingMatchId(null);
     setCurrentScreen("home");
+  };
+
+  const goToRomancePartnerPage = () => {
+    closeAllPanels();
+    setCurrentScreen("home");
+    setRomanceTwoVisible(true);
+    setPartnerVisible(true);
+    setSelectedDatingMatchId(null);
   };
 
   if (engineeringVisible) {
@@ -1219,7 +1539,13 @@ export default function App() {
           </View>
 
           <Pressable
-            onPress={() => setCurrentScreen("datingApp")}
+            onPress={() => {
+              if (!ensureDatingAppAccess()) {
+                return;
+              }
+
+              setCurrentScreen("datingApp");
+            }}
             style={styles.box}
           >
             <Text>Dating App</Text>
@@ -1238,583 +1564,181 @@ export default function App() {
 
   if (currentScreen === "datingApp") {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.appScreenHeader}>
-            <Pressable
-              onPress={() => setCurrentScreen("romance")}
-              style={styles.headerSideButton}
-            >
-              <Text>{"<"}</Text>
-            </Pressable>
-            <View style={styles.appScreenHeaderTitleWrap}>
-              <Text style={styles.screenTitle}>Dating App</Text>
-            </View>
-            <Pressable
-              onPress={() => {
-                closeAllPanels();
-                setCurrentScreen("home");
-              }}
-              style={styles.headerSideButton}
-            >
-              <Text>X</Text>
-            </Pressable>
-          </View>
-          <Pressable onPress={goToHomeScreen} style={styles.box}>
-            <Text>Home</Text>
-          </Pressable>
-
-          <View style={styles.progressRow}>
-            <Text style={styles.progressStepActive}>Profile</Text>
-            <View style={styles.progressLine} />
-            <Text>Preferences</Text>
-            <View style={styles.progressLine} />
-            <Text>Matches</Text>
-          </View>
-
-          <Text style={styles.sectionTitle}>Set Up Dating Profile</Text>
-
-          <View style={styles.profileIconBox}>
-            <View style={styles.profileIconHead} />
-            <View style={styles.profileIconBody} />
-          </View>
-
-          <View style={styles.readOnlyFieldGroup}>
-            <View style={styles.readOnlyFieldRow}>
-              <Text>Name</Text>
-              <Text>{currentCharacter.firstName}</Text>
-            </View>
-            <View style={styles.readOnlyFieldRow}>
-              <Text>Age</Text>
-              <Text>{currentCharacterAge}</Text>
-            </View>
-            <View style={styles.readOnlyFieldRow}>
-              <Text>Occupation</Text>
-              <Text>{currentDatingAppOccupation}</Text>
-            </View>
-            <View style={styles.readOnlyFieldRowLast}>
-              <Text>Location</Text>
-              <Text>{household.country}</Text>
-            </View>
-          </View>
-
-          <Pressable
-            onPress={() => setCurrentScreen("datingAppPreferences")}
-            style={styles.box}
-          >
-            <Text>Next: Preferences</Text>
-          </Pressable>
-        </ScrollView>
-      </SafeAreaView>
+      <DatingProfileScreen
+        styles={styles}
+        playerName={currentCharacter.firstName}
+        playerAge={currentCharacterAge}
+        occupation={currentDatingAppOccupation}
+        country={household.country}
+        onBack={() => setCurrentScreen("romance")}
+        onClose={() => {
+          closeAllPanels();
+          setCurrentScreen("home");
+        }}
+        onHome={goToHomeScreen}
+        onNext={() => setCurrentScreen("datingAppPreferences")}
+      />
     );
   }
 
   if (currentScreen === "datingAppPreferences") {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.appScreenHeader}>
-            <Pressable
-              onPress={() => setCurrentScreen("datingApp")}
-              style={styles.headerSideButton}
-            >
-              <Text>{"<"}</Text>
-            </Pressable>
-            <View style={styles.appScreenHeaderTitleWrap}>
-              <Text style={styles.screenTitle}>Dating App</Text>
-            </View>
-            <Pressable
-              onPress={() => {
-                closeAllPanels();
-                setCurrentScreen("home");
-              }}
-              style={styles.headerSideButton}
-            >
-              <Text>X</Text>
-            </Pressable>
-          </View>
-          <Pressable onPress={goToHomeScreen} style={styles.box}>
-            <Text>Home</Text>
-          </Pressable>
-
-          <View style={styles.progressRow}>
-            <Text>Profile</Text>
-            <View style={styles.progressLine} />
-            <Text style={styles.progressStepActive}>Preferences</Text>
-            <View style={styles.progressLine} />
-            <Text>Matches</Text>
-          </View>
-
-          <Text style={styles.sectionTitle}>Preferences</Text>
-          <Text>Who are you looking for?</Text>
-
-          <View style={styles.detailGroup}>
-            <Text style={styles.fieldSectionTitle}>Age Range</Text>
-            <View style={styles.ageSelectorsHeaderRow}>
-              <Text>Minimum Age</Text>
-              <Text>Maximum Age</Text>
-            </View>
-            <View style={styles.ageSelectorsRow}>
-              <View style={styles.ageSelector}>
-                <Pressable
-                  onPress={() =>
-                    setDatingAgeFilter((current) => {
-                      const filter =
-                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
-                      return {
-                        ...filter,
-                        minimumAge: Math.max(
-                          MINIMUM_DATING_AGE,
-                          filter.minimumAge - 1
-                        ),
-                      };
-                    })
-                  }
-                  style={styles.ageAdjustButton}
-                >
-                  <Text>-</Text>
-                </Pressable>
-                <Text>{resolvedDatingAgeFilter.minimumAge}</Text>
-                <Pressable
-                  onPress={() =>
-                    setDatingAgeFilter((current) => {
-                      const filter =
-                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
-                      return {
-                        ...filter,
-                        minimumAge: Math.min(
-                          filter.maximumAge,
-                          filter.minimumAge + 1
-                        ),
-                      };
-                    })
-                  }
-                  style={styles.ageAdjustButton}
-                >
-                  <Text>+</Text>
-                </Pressable>
-              </View>
-              <View style={styles.ageSelector}>
-                <Pressable
-                  onPress={() =>
-                    setDatingAgeFilter((current) => {
-                      const filter =
-                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
-                      return {
-                        ...filter,
-                        maximumAge: Math.max(
-                          filter.minimumAge,
-                          filter.maximumAge - 1
-                        ),
-                      };
-                    })
-                  }
-                  style={styles.ageAdjustButton}
-                >
-                  <Text>-</Text>
-                </Pressable>
-                <Text>{formatDatingAgeLabel(resolvedDatingAgeFilter.maximumAge)}</Text>
-                <Pressable
-                  onPress={() =>
-                    setDatingAgeFilter((current) => {
-                      const filter =
-                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
-                      return {
-                        ...filter,
-                        maximumAge: Math.min(
-                          MAXIMUM_DATING_AGE,
-                          filter.maximumAge + 1
-                        ),
-                      };
-                    })
-                  }
-                  style={styles.ageAdjustButton}
-                >
-                  <Text>+</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.detailGroup}>
-            <Text style={styles.fieldSectionTitle}>Gender</Text>
-            <View style={styles.genderOptionRow}>
-              <Pressable
-                onPress={() => setDatingGenderFilter("Female")}
-                style={styles.genderOption}
-              >
-                <Text
-                  style={
-                    datingGenderFilter === "Female"
-                      ? styles.progressStepActive
-                      : undefined
-                  }
-                >
-                  Women
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setDatingGenderFilter("Male")}
-                style={styles.genderOption}
-              >
-                <Text
-                  style={
-                    datingGenderFilter === "Male"
-                      ? styles.progressStepActive
-                      : undefined
-                  }
-                >
-                  Men
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setDatingGenderFilter("Both")}
-                style={styles.genderOption}
-              >
-                <Text
-                  style={
-                    datingGenderFilter === "Both"
-                      ? styles.progressStepActive
-                      : undefined
-                  }
-                >
-                  Both
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-
-          <Pressable
-            onPress={openDatingDiscover}
-            style={styles.box}
-          >
-            <Text>Create Profile</Text>
-          </Pressable>
-        </ScrollView>
-      </SafeAreaView>
+      <DatingPreferencesScreen
+        styles={styles}
+        introText="Who are you looking for?"
+        resolvedDatingAgeFilter={resolvedDatingAgeFilter}
+        maximumAgeLabel={formatDatingAgeLabel(resolvedDatingAgeFilter.maximumAge)}
+        resolvedDatingGenderFilter={resolvedDatingGenderFilter}
+        onBack={() => setCurrentScreen("datingApp")}
+        onClose={() => {
+          closeAllPanels();
+          setCurrentScreen("home");
+        }}
+        onHome={goToHomeScreen}
+        onDecreaseMinimumAge={() =>
+          setDatingAgeFilter((current) =>
+            adjustDatingMinimumAge(
+              current ?? getDatingAgeFilterFromPreferences(currentDatingPreferences)
+            )
+          )
+        }
+        onIncreaseMinimumAge={() =>
+          setDatingAgeFilter((current) =>
+            increaseDatingMinimumAge(
+              current ?? getDatingAgeFilterFromPreferences(currentDatingPreferences)
+            )
+          )
+        }
+        onDecreaseMaximumAge={() =>
+          setDatingAgeFilter((current) =>
+            decreaseDatingMaximumAge(
+              current ?? getDatingAgeFilterFromPreferences(currentDatingPreferences)
+            )
+          )
+        }
+        onIncreaseMaximumAge={() =>
+          setDatingAgeFilter((current) =>
+            increaseDatingMaximumAge(
+              current ?? getDatingAgeFilterFromPreferences(currentDatingPreferences)
+            )
+          )
+        }
+        onSelectGender={setDatingGenderFilter}
+        onCreateProfile={openDatingDiscover}
+      />
     );
   }
 
   if (currentScreen === "datingAppDiscover") {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.discoverHeaderRow}>
-            <Pressable
-              onPress={() =>
-                setDatingAppSettingsVisible((current) => !current)
-              }
-              style={styles.headerSideButton}
-            >
-              <Text>Settings</Text>
-            </Pressable>
-            <View style={styles.appScreenHeaderTitleWrap}>
-              <Text style={styles.screenTitle}>Dating App</Text>
-            </View>
-            <View style={styles.discoverRoseBadge}>
-              <Text>{`Roses: ${datingRosesRemaining}/3`}</Text>
-            </View>
-          </View>
-          <Pressable onPress={goToHomeScreen} style={styles.box}>
-            <Text>Home</Text>
-          </Pressable>
-
-          {datingAppSettingsVisible ? (
-            <View style={styles.detailBox}>
-              <Pressable
-                onPress={() => {
-                  setDatingAppSettingsVisible(false);
-                  setCurrentScreen("datingAppMatches");
-                }}
-                style={styles.innerBox}
-              >
-                <Text>See Matches</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  setDatingAppSettingsVisible(false);
-                  setCurrentScreen("datingAppPreferences");
-                }}
-                style={styles.innerBox}
-              >
-                <Text>Update Preferences</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  setDatingAppSettingsVisible(false);
-                  setCurrentScreen("datingApp");
-                }}
-                style={styles.innerBox}
-              >
-                <Text>Update Profile</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          <View style={styles.discoverTitleRow}>
-            <View style={styles.detailGroup}>
-              <Text style={styles.sectionTitle}>Discover</Text>
-              <Text>Swipe to meet new people</Text>
-              <Text>{`Profiles viewed: ${currentDatingDiscoveryState.viewedProfileIds.length} / ${ANNUAL_DATING_DISCOVER_LIMIT}`}</Text>
-            </View>
-            <Pressable
-              onPress={() =>
-                setDatingEngineerViewVisible((current) => !current)
-              }
-              style={styles.engineerToggleButton}
-            >
-              <Text>E</Text>
-            </Pressable>
-          </View>
-
-          {currentDatingProfile ? (
-            <>
-              <View style={styles.box}>
-                <View style={styles.discoverProfileHeader}>
-                  <View style={styles.smallProfileIconBox}>
-                    <View style={styles.smallProfileIconHead} />
-                    <View style={styles.smallProfileIconBody} />
-                  </View>
-                  <View style={styles.detailGroup}>
-                    <Text>{`${currentDatingProfile.firstName} ${currentDatingProfile.lastName}`}</Text>
-                    <Text>{currentDatingProfile.age}</Text>
-                    <Text>{currentDatingProfile.job}</Text>
-                  </View>
-                </View>
-                <Text>{`Appearance: ${currentDatingProfile.appearance}`}</Text>
-                <Text>{`Attractiveness: ${currentDatingProfile.attractiveness}`}</Text>
-                {datingEngineerViewVisible ? (
-                  <View style={styles.detailGroup}>
-                    <Text>{`Intelligence: ${currentDatingProfile.intelligence}`}</Text>
-                    <Text>{`Chemistry: ${currentProfileChemistry ?? "???"}`}</Text>
-                    <Text>{`Match Chance: ${currentProfileMatchChance}%`}</Text>
-                    <Text>{`Rose Match Chance: ${currentProfileRoseMatchChance}%`}</Text>
-                  </View>
-                ) : null}
-              </View>
-
-              <View style={styles.discoverActionRow}>
-                <Pressable
-                  onPress={() => handleDatingProfileAction("pass")}
-                  style={styles.discoverActionButton}
-                >
-                  <Text>Pass</Text>
-                </Pressable>
-                <Pressable
-                  disabled={datingMatchLimitReached}
-                  onPress={
-                    datingMatchLimitReached
-                      ? undefined
-                      : () => handleDatingProfileAction("like")
-                  }
-                  style={styles.discoverActionButton}
-                >
-                  <Text>Like</Text>
-                </Pressable>
-                <Pressable
-                  disabled={datingRosesRemaining <= 0 || datingMatchLimitReached}
-                  onPress={
-                    datingRosesRemaining <= 0 || datingMatchLimitReached
-                      ? undefined
-                      : () => handleDatingProfileAction("rose")
-                  }
-                  style={styles.discoverActionButton}
-                >
-                  <Text>Send a Rose</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : (
-            <Text>No more profiles available this year.</Text>
-          )}
-        </ScrollView>
-      </SafeAreaView>
+      <DatingDiscoverScreen
+        styles={styles}
+        currentDatingRoseCount={currentDatingRoseState.remaining}
+        currentViewedCount={currentDatingDiscoveryState.viewedProfileIds.length}
+        annualLimit={ANNUAL_DATING_DISCOVER_LIMIT}
+        currentDatingProfile={currentDatingProfile}
+        currentDatingProfileAge={
+          currentDatingProfile
+            ? getDatingProfileAge(currentDatingProfile, household.currentYear)
+            : null
+        }
+        currentProfileChemistry={currentProfileChemistry}
+        currentProfileMatchChance={currentProfileMatchChance}
+        currentProfileRoseMatchChance={currentProfileRoseMatchChance}
+        discoverEngineerViewVisible={discoverEngineerViewVisible}
+        datingActionInProgress={datingActionInProgress}
+        datingMatchLimitReached={datingMatchLimitReached}
+        datingAppSettingsVisible={datingAppSettingsVisible}
+        onHome={goToHomeScreen}
+        onToggleSettings={() => setDatingAppSettingsVisible((current) => !current)}
+        onSeeMatches={() => {
+          setDatingAppSettingsVisible(false);
+          setCurrentScreen("datingAppMatches");
+        }}
+        onUpdatePreferences={() => {
+          setDatingAppSettingsVisible(false);
+          setCurrentScreen("datingAppPreferences");
+        }}
+        onUpdateProfile={() => {
+          setDatingAppSettingsVisible(false);
+          setCurrentScreen("datingApp");
+        }}
+        onToggleEngineerView={() =>
+          setDiscoverEngineerViewVisible((current) => !current)
+        }
+        onPass={() => handleDatingProfileAction("pass")}
+        onLike={() => handleDatingProfileAction("like")}
+        onRose={() => handleDatingProfileAction("rose")}
+      />
     );
   }
 
   if (currentScreen === "datingAppMatches") {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.appScreenHeader}>
-            <Pressable
-              onPress={() => setCurrentScreen("datingAppDiscover")}
-              style={styles.headerSideButton}
-            >
-              <Text>{"<"}</Text>
-            </Pressable>
-            <View style={styles.appScreenHeaderTitleWrap}>
-              <Text style={styles.screenTitle}>Dating App</Text>
-            </View>
-            <Pressable
-              onPress={() => {
-                closeAllPanels();
-                setCurrentScreen("home");
-              }}
-              style={styles.headerSideButton}
-            >
-              <Text>X</Text>
-            </Pressable>
-          </View>
-          <Pressable onPress={goToHomeScreen} style={styles.box}>
-            <Text>Home</Text>
-          </Pressable>
-
-          <View style={styles.matchesHeadingRow}>
-            <View style={styles.detailGroup}>
-              <Text style={styles.sectionTitle}>Matches</Text>
-              <Text>People who liked you back</Text>
-            </View>
-            <View style={styles.detailGroupRight}>
-              <Text>{`${activeDatingMatches.length} / 7`}</Text>
-            </View>
-          </View>
-
-          {activeDatingMatches.length === 0 ? (
-            <View style={styles.detailGroup}>
-              <Text>No matches yet.</Text>
-              <Text>Keep exploring profiles to meet someone.</Text>
-            </View>
-          ) : (
-            activeDatingMatches.map((match) => (
-              <Pressable
-                key={match.id}
-                onPress={() => {
-                  setSelectedDatingMatchId(match.id);
-                  setCurrentScreen("datingAppMatchDetails");
-                }}
-                style={styles.box}
-              >
-                <View style={styles.matchRow}>
-                  <View style={styles.smallProfileIconBox}>
-                    <View style={styles.smallProfileIconHead} />
-                    <View style={styles.smallProfileIconBody} />
-                  </View>
-                  <View style={styles.matchRowContent}>
-                    <Text>{`${match.firstName} ${match.lastName}, ${match.age}`}</Text>
-                    <Text>{match.job}</Text>
-                    <Text>You matched!</Text>
-                  </View>
-                  <Text>{">"}</Text>
-                </View>
-              </Pressable>
-            ))
-          )}
-
-          {activeDatingMatches.length >= 7 ? (
-            <Text>Match limit reached.</Text>
-          ) : null}
-        </ScrollView>
-      </SafeAreaView>
+      <DatingMatchesScreen
+        styles={styles}
+        activeDatingMatches={activeDatingMatches}
+        matchAgesById={matchAgesById}
+        onBack={() => setCurrentScreen("datingAppDiscover")}
+        onClose={() => {
+          closeAllPanels();
+          setCurrentScreen("home");
+        }}
+        onHome={goToHomeScreen}
+        onOpenMatch={(matchId) => {
+          setSelectedDatingMatchId(matchId);
+          setMatchDetailsEngineerViewVisible(false);
+          setMatchGoOnDateVisible(false);
+          setCurrentScreen("datingAppMatchDetails");
+        }}
+      />
     );
   }
 
   if (currentScreen === "datingAppMatchDetails") {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.appScreenHeader}>
-            <Pressable
-              onPress={() => setCurrentScreen("datingAppMatches")}
-              style={styles.headerSideButton}
-            >
-              <Text>{"<"}</Text>
-            </Pressable>
-            <View style={styles.appScreenHeaderTitleWrap}>
-              <Text style={styles.screenTitle}>Dating App</Text>
-            </View>
-            <Pressable
-              onPress={() =>
-                setDatingEngineerViewVisible((current) => !current)
+      <DatingMatchDetailsScreen
+        styles={styles}
+        selectedDatingMatch={
+          selectedDatingMatch
+            ? {
+                id: selectedDatingMatch.id,
+                firstName: selectedDatingMatch.firstName,
+                lastName: selectedDatingMatch.lastName,
+                age: getDatingProfileAge(selectedDatingMatch, household.currentYear),
+                job: selectedDatingMatch.job,
+                friendshipScore: selectedDatingMatch.friendshipScore,
+                romanceScore: selectedDatingMatch.romanceScore,
+                intelligence: selectedDatingMatch.intelligence,
+                chemistry: selectedDatingMatch.chemistry,
+                attractiveness: selectedDatingMatch.attractiveness,
               }
-              style={styles.headerSideButton}
-            >
-              <Text>E</Text>
-            </Pressable>
-          </View>
-          <Pressable onPress={goToHomeScreen} style={styles.box}>
-            <Text>Home</Text>
-          </Pressable>
-
-          {selectedDatingMatch ? (
-            <>
-              <View style={styles.box}>
-                <View style={styles.discoverProfileHeader}>
-                  <View style={styles.smallProfileIconBox}>
-                    <View style={styles.smallProfileIconHead} />
-                    <View style={styles.smallProfileIconBody} />
-                  </View>
-                  <View style={styles.detailGroup}>
-                    <Text>{`${selectedDatingMatch.firstName} ${selectedDatingMatch.lastName}`}</Text>
-                    <Text>{selectedDatingMatch.age}</Text>
-                    <Text>{selectedDatingMatch.job}</Text>
-                    <Text>{household.country || "Unknown"}</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.detailGroup}>
-                <Text>{`Friendship: ${selectedDatingMatch.friendshipScore}`}</Text>
-                <Text>{`Romance: ${selectedDatingMatch.romanceScore}`}</Text>
-              </View>
-
-              {datingEngineerViewVisible ? (
-                <View style={styles.detailGroup}>
-                  <Text>{`Intelligence: ${selectedDatingMatch.intelligence}`}</Text>
-                  <Text>{`Chemistry: ${selectedDatingMatch.chemistry ?? "???"}`}</Text>
-                  <Text>{`Attraction: ${selectedDatingMatch.attractiveness}`}</Text>
-                  <Text>{`Match Chance: ${selectedDatingMatchChance}%`}</Text>
-                  <Text>{`Rose Match Chance: ${selectedDatingMatchRoseChance}%`}</Text>
-                </View>
-              ) : null}
-
-              <View style={styles.matchDetailsActionGrid}>
-                <Pressable
-                  onPress={() => interactWithMatch(selectedDatingMatch.id, "text")}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Text</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => interactWithMatch(selectedDatingMatch.id, "date")}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Go on a Date</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => Alert.alert("Dating App", "Coming soon")}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Spend the Night</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => Alert.alert("Dating App", "Coming soon")}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Give Gift</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => askToBePartner(selectedDatingMatch.id)}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Start Relationship</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    unmatchProfile(selectedDatingMatch.id);
-                    setCurrentScreen("datingAppMatches");
-                  }}
-                  style={styles.matchDetailsActionButton}
-                >
-                  <Text>Unmatch</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : (
-            <Text>No match selected.</Text>
-          )}
-        </ScrollView>
-      </SafeAreaView>
+            : null
+        }
+        matchDetailsEngineerViewVisible={matchDetailsEngineerViewVisible}
+        selectedDatingMatchChance={selectedDatingMatchChance}
+        selectedDatingMatchRoseChance={selectedDatingMatchRoseChance}
+        matchGoOnDateVisible={matchGoOnDateVisible}
+        dateCategoryRanges={dateCategoryRanges}
+        onBack={() => setCurrentScreen("datingAppMatches")}
+        onHome={goToHomeScreen}
+        onToggleEngineerView={() =>
+          setMatchDetailsEngineerViewVisible((current) => !current)
+        }
+        onText={() =>
+          selectedDatingMatch ? interactWithMatch(selectedDatingMatch.id) : undefined
+        }
+        onToggleGoOnDate={() => setMatchGoOnDateVisible((current) => !current)}
+        onSpendTheNight={() => Alert.alert("Dating App", "Coming soon")}
+        onGiveGift={() => Alert.alert("Dating App", "Coming soon")}
+        onStartRelationship={() =>
+          selectedDatingMatch ? askToBePartner(selectedDatingMatch.id) : undefined
+        }
+        onUnmatch={() =>
+          selectedDatingMatch ? confirmUnmatchProfile(selectedDatingMatch) : undefined
+        }
+        onGoOnDate={goOnDateWithSelectedMatch}
+      />
     );
   }
 
@@ -2255,169 +2179,43 @@ export default function App() {
   };
 
   const startSwiping = () => {
-    updateCurrentCharacter((character) => prepareDatingDiscoverCharacter(character));
+    setActiveDatingProfileId(null);
+    updateCurrentCharacter((character) =>
+      prepareDatingDiscoverCharacter({
+        character,
+        country: household.country,
+        currentYear: household.currentYear,
+      })
+    );
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
   };
 
   const refreshDatingMatches = () => {
+    setActiveDatingProfileId(null);
     updateCurrentCharacter((character) => {
       if (character.datingRefreshesRemaining <= 0) return character;
+      const currentYearCandidatePool = getDatingCandidatePoolForYear(
+        character,
+        household.currentYear
+      );
+      const additionalProfiles = buildAdditionalDatingProfilesForRefresh({
+        character,
+        country: household.country,
+        currentYear: household.currentYear,
+      });
+
       return {
         ...character,
-        datingProfiles: generateDatingProfiles(
-          character,
-          household.country,
-          resolvedDatingAgeFilter,
-          datingGenderFilter,
-          [],
-          createCharacter,
-          assignJobToCharacter,
-          pickDegreeForJob,
-          household.currentYear
-        ),
+        datingCandidatePool: {
+          year: household.currentYear,
+          profiles: [...currentYearCandidatePool.profiles, ...additionalProfiles],
+        },
         datingRefreshesRemaining: character.datingRefreshesRemaining - 1,
       };
     });
     setMatchChanceBreakdownVisible(false);
-    setSelectedDatingMatchId(null);
-  };
-
-  const interactWithMatch = (matchId: string, mode: "text" | "date") => {
-    const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
-    if (!match || !match.matched) {
-      return;
-    }
-
-    const chemistryScore =
-      match.chemistry ??
-      calculateChemistryScore(currentCharacter, {
-        traits: match.traits,
-        job: match.job,
-        degree: match.degree,
-      });
-    const interactionChance = getDatingInteractionChance(
-      chemistryScore,
-      match.friendshipScore,
-      mode
-    );
-    const accepted = Math.random() < interactionChance;
-
-    updateCurrentCharacter((character) => ({
-      ...character,
-      datingMatches: character.datingMatches
-        .map((match) => {
-          if (match.id !== matchId) return match;
-          return applyDatingInteraction(character, match, mode, accepted);
-        })
-        .sort((a, b) => Number(b.interacted) - Number(a.interacted)),
-    }));
-    Alert.alert(
-      "Romance",
-      mode === "date"
-        ? accepted
-          ? "The date went well."
-          : "The date did not go well."
-        : accepted
-          ? "The conversation went well."
-          : "The conversation felt flat."
-    );
-  };
-
-  const askToBePartner = (matchId: string) => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
-      );
-      if (!currentCharacter) {
-        return currentHousehold;
-      }
-
-      const match = currentCharacter.datingMatches.find((item) => item.id === matchId);
-      if (!match) return currentHousehold;
-      const acceptanceChance = getPartnerAcceptanceChance(match);
-      const accepted = Math.random() * 100 < acceptanceChance;
-      if (!accepted) {
-        Alert.alert("Romance", "Rejected.");
-        return {
-          ...currentHousehold,
-          characters: currentHousehold.characters.map((character) =>
-            character.id === currentHousehold.currentCharacterId
-              ? {
-                  ...character,
-                  datingMatches: character.datingMatches.map((item) =>
-                    item.id === matchId
-                      ? {
-                          ...item,
-                          romanceScore: clamp(item.romanceScore - 10, 0, 100),
-                        }
-                      : item
-                  ),
-                }
-              : character
-          ),
-        };
-      }
-
-      const promotion = promoteNpcToPerson(
-        {
-          personId: match.personId,
-          firstName: match.firstName,
-          lastName: match.lastName,
-          age: match.age,
-          gender: match.gender,
-          race: match.race,
-          appearance: match.appearance,
-          intelligence: match.intelligence,
-          traits: match.traits,
-          job: match.job,
-          annualIncomeGBP: match.annualIncomeGBP,
-          careerCeiling: match.careerCeiling,
-          degree: match.degree,
-          universityYearsRemaining: 0,
-        },
-        currentHousehold.currentYear,
-        currentHousehold.characters
-      );
-      const promotedMatch = {
-        ...match,
-        personId: promotion.person.id,
-      };
-      const nextCharacters = promotion.created
-        ? [...currentHousehold.characters, promotion.person]
-        : currentHousehold.characters;
-      const persistentCurrentCharacter =
-        nextCharacters.find(
-          (character) => character.id === currentHousehold.currentCharacterId
-        ) ?? currentCharacter;
-      const persistentPartner =
-        nextCharacters.find((character) => character.id === promotion.person.id) ??
-        promotion.person;
-      const [datedCurrentCharacter, datedPartner] = startDating(
-        persistentCurrentCharacter,
-        persistentPartner,
-        currentHousehold.currentYear
-      );
-
-      Alert.alert("Romance", "Accepted.");
-      return {
-        ...currentHousehold,
-        characters: nextCharacters.map((character) =>
-          character.id === datedCurrentCharacter.id
-            ? {
-                ...datedCurrentCharacter,
-                partner: promotedMatch,
-                datingMatches: datedCurrentCharacter.datingMatches.filter(
-                  (item) => item.id !== matchId
-                ),
-              }
-            : character.id === datedPartner.id
-              ? datedPartner
-            : character
-        ),
-      };
-    });
     setSelectedDatingMatchId(null);
   };
 
@@ -2948,7 +2746,10 @@ export default function App() {
             </Pressable>
             {currentCharacter.partner && partnerVisible ? (
               <View style={styles.detailBox}>
-                <Text>{`Age: ${currentCharacter.partner.age}`}</Text>
+                <Text>{`Age: ${getDatingProfileAge(
+                  currentCharacter.partner,
+                  household.currentYear
+                )}`}</Text>
                 <Text>{`Friendship: ${currentCharacter.partner.friendshipScore}/100`}</Text>
                 <Text>{`Romance: ${currentCharacter.partner.romanceScore}/100`}</Text>
                 <Text style={styles.testingText}>{`Chemistry: ${
@@ -3230,10 +3031,10 @@ export default function App() {
             ) : null}
             <Pressable
               onPress={() => {
-                if (currentCharacterAge < 18) {
-                  Alert.alert("Romance", "Dating App becomes available at 18.");
+                if (!ensureDatingAppAccess()) {
                   return;
                 }
+
                 setDatingAppVisible((value) => !value);
               }}
               style={styles.innerBox}
@@ -3258,7 +3059,7 @@ export default function App() {
                   </Text>
                 ) : null}
                 <View style={styles.innerBox}>
-                  <Text>{`Looking For Gender: ${datingGenderFilter}`}</Text>
+                  <Text>{`Looking For Gender: ${currentDatingPreferences.gender}`}</Text>
                 </View>
                 <View style={styles.innerBox}>
                   <Text>{`Looking For Age: ${currentDatingAgeFilterLabel}`}</Text>
@@ -3280,7 +3081,10 @@ export default function App() {
                 {currentDatingProfile ? (
                   <View style={styles.innerBox}>
                     <Text>{`${currentDatingProfile.firstName} ${currentDatingProfile.lastName}`}</Text>
-                    <Text>{`Age: ${currentDatingProfile.age}`}</Text>
+                    <Text>{`Age: ${getDatingProfileAge(
+                      currentDatingProfile,
+                      household.currentYear
+                    )}`}</Text>
                     <Text>{`Appearance: ${currentDatingProfile.appearance}/100`}</Text>
                     <Text>{`Job: ${currentDatingProfile.job}`}</Text>
                     <Text>Traits: ???</Text>
@@ -3320,15 +3124,16 @@ export default function App() {
                       </View>
                     ) : null}
                     <Pressable
+                      disabled={datingActionInProgress}
                       onPress={() => handleDatingProfileAction("pass")}
                       style={styles.innerBox}
                     >
                       <Text>Pass</Text>
                     </Pressable>
                     <Pressable
-                      disabled={datingMatchLimitReached}
+                      disabled={datingActionInProgress || datingMatchLimitReached}
                       onPress={
-                        datingMatchLimitReached
+                        datingActionInProgress || datingMatchLimitReached
                           ? undefined
                           : () => handleDatingProfileAction("like")
                       }
@@ -3337,8 +3142,14 @@ export default function App() {
                       <Text>Like</Text>
                     </Pressable>
                     <Pressable
-                      disabled={datingMatchLimitReached}
+                      disabled={
+                        datingActionInProgress ||
+                        currentDatingRoseState.remaining <= 0 ||
+                        datingMatchLimitReached
+                      }
                       onPress={
+                        datingActionInProgress ||
+                        currentDatingRoseState.remaining <= 0 ||
                         datingMatchLimitReached
                           ? undefined
                           : () => handleDatingProfileAction("rose")
@@ -3369,7 +3180,10 @@ export default function App() {
                           </Pressable>
                           {selectedDatingMatchId === match.id ? (
                             <View style={styles.detailBox}>
-                              <Text>{`Age: ${match.age}`}</Text>
+                              <Text>{`Age: ${getDatingProfileAge(
+                                match,
+                                household.currentYear
+                              )}`}</Text>
                               <Text>{`Appearance: ${match.appearance}/100`}</Text>
                               <Text>{`Intelligence: ${match.intelligence}/100`}</Text>
                               <Text>{`Job: ${match.job}`}</Text>
@@ -3381,13 +3195,18 @@ export default function App() {
                               <Text>{`Friendship: ${match.friendshipScore}/100`}</Text>
                               <Text>{`Romance: ${match.romanceScore}/100`}</Text>
                               <Pressable
-                                onPress={() => interactWithMatch(match.id, "text")}
+                                onPress={() => interactWithMatch(match.id)}
                                 style={styles.innerBox}
                               >
                                 <Text>Text</Text>
                               </Pressable>
                               <Pressable
-                                onPress={() => interactWithMatch(match.id, "date")}
+                                onPress={() => {
+                                  setSelectedDatingMatchId(match.id);
+                                  setMatchDetailsEngineerViewVisible(false);
+                                  setMatchGoOnDateVisible(true);
+                                  setCurrentScreen("datingAppMatchDetails");
+                                }}
                                 style={styles.innerBox}
                               >
                                 <Text>Go On A Date</Text>

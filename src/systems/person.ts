@@ -1,5 +1,7 @@
 import type {
   Aspiration,
+  DatingPreferences,
+  DatingRoseState,
   DiaryEntry,
   DiaryEntryCategory,
   DeathRecord,
@@ -12,6 +14,7 @@ import type {
 } from "../types/person";
 import type { Country } from "../types/character";
 import type { Classmate, DatingProfile, Friend } from "../types/relationships";
+import { getDefaultDatingAgeFilter } from "../data/dating";
 import { buildAcademicPerformanceProfile } from "./education";
 import {
   formatFriendHigherEducationOccupation,
@@ -61,6 +64,32 @@ export const getDefaultRelationshipPreferences = ({
 
 export const getPersonAge = (person: Pick<Person, "birthYear">, currentYear: number) =>
   currentYear - person.birthYear;
+
+export const getDefaultDatingPreferences = (
+  person: Pick<Person, "birthYear" | "genderPreference">,
+  currentYear: number
+): DatingPreferences => {
+  const defaultAgeFilter = getDefaultDatingAgeFilter(
+    getPersonAge(person, currentYear)
+  );
+
+  return {
+    minimumAge: defaultAgeFilter.minimumAge,
+    maximumAge: defaultAgeFilter.maximumAge,
+    gender: person.genderPreference,
+  };
+};
+
+export const getDatingRoseStateForYear = (
+  roseState: DatingRoseState,
+  currentYear: number
+): DatingRoseState =>
+  roseState.year === currentYear
+    ? roseState
+    : {
+        year: currentYear,
+        remaining: 3,
+      };
 
 export const getPersonById = (
   people: Person[],
@@ -151,7 +180,7 @@ export const syncDatingProfileFromPerson = (
   firstName: person.firstName,
   lastName: person.lastName,
   gender: person.gender,
-  age: getPersonAge(person, currentYear),
+  birthYear: person.birthYear,
   race: person.race,
   appearance: person.appearance,
   intelligence: person.intelligence,
@@ -190,14 +219,14 @@ export const syncLinkedSocialRecordsFromPeople = (
     }
     return nextFriend;
   });
-  let datingProfilesChanged = false;
-  const nextDatingProfiles = character.datingProfiles.map((profile) => {
+  let datingCandidatePoolChanged = false;
+  const nextDatingCandidatePoolProfiles = character.datingCandidatePool.profiles.map((profile) => {
     const person = resolveDatingProfilePerson(profile, people);
     const nextProfile = person
       ? syncDatingProfileFromPerson(profile, person, currentYear)
       : profile;
     if (nextProfile !== profile) {
-      datingProfilesChanged = true;
+      datingCandidatePoolChanged = true;
     }
     return nextProfile;
   });
@@ -222,9 +251,12 @@ export const syncLinkedSocialRecordsFromPeople = (
     : null;
   const classmates = classmatesChanged ? nextClassmates : character.classmates;
   const friends = friendsChanged ? nextFriends : character.friends;
-  const datingProfiles = datingProfilesChanged
-    ? nextDatingProfiles
-    : character.datingProfiles;
+  const datingCandidatePool = datingCandidatePoolChanged
+    ? {
+        ...character.datingCandidatePool,
+        profiles: nextDatingCandidatePoolProfiles,
+      }
+    : character.datingCandidatePool;
   const datingMatches = datingMatchesChanged
     ? nextDatingMatches
     : character.datingMatches;
@@ -233,7 +265,7 @@ export const syncLinkedSocialRecordsFromPeople = (
   if (
     classmates === character.classmates &&
     friends === character.friends &&
-    datingProfiles === character.datingProfiles &&
+    datingCandidatePool === character.datingCandidatePool &&
     datingMatches === character.datingMatches &&
     partner === character.partner
   ) {
@@ -244,7 +276,7 @@ export const syncLinkedSocialRecordsFromPeople = (
     ...character,
     classmates,
     friends,
-    datingProfiles,
+    datingCandidatePool,
     datingMatches,
     partner,
   };
@@ -255,6 +287,7 @@ export type PromotableNpc = {
   firstName: string;
   lastName: string;
   age: number;
+  birthYear?: number;
   gender?: Person["gender"] | null;
   race: Person["race"];
   appearance: number;
@@ -281,7 +314,8 @@ export const promoteNpcToPerson = (
   }
 
   const gender = npc.gender ?? "Female";
-  const birthYear = currentYear - npc.age;
+  const birthYear =
+    typeof npc.birthYear === "number" ? npc.birthYear : currentYear - npc.age;
   const personId = npc.personId ?? `person-${Math.random().toString(36).slice(2, 10)}`;
   const strengths: Person["strengths"] = [];
   const weaknesses: Person["weaknesses"] = [];
@@ -354,15 +388,27 @@ export const promoteNpcToPerson = (
     pendingUniversityDegree: null,
     universityYearsRemaining: npc.universityYearsRemaining ?? 0,
     genderPreference: "Both",
-    datingProfiles: [],
+    datingPreferences: {
+      minimumAge: Math.max(18, npc.age - 5),
+      maximumAge: Math.max(18, Math.min(90, npc.age + 5)),
+      gender: "Both",
+    },
+    datingCandidatePool: {
+      year: currentYear,
+      profiles: [],
+    },
     datingMatches: [],
     datingDiscoveryState: {
-      year: birthYear,
+      year: currentYear,
       viewedProfileIds: [],
       passedProfileIds: [],
     },
     romanticRelationships: [],
     partner: null,
+    datingRoseState: {
+      year: currentYear,
+      remaining: 3,
+    },
     datingRefreshesRemaining: 2,
     fullTimeJobListings: [],
     partTimeJobListings: [],

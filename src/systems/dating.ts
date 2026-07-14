@@ -38,6 +38,11 @@ export const getAgeRangeBounds = (range: DatingAgeRange): [number, number] => {
   return [18, 80];
 };
 
+export const getDatingProfileAge = (
+  profile: Pick<DatingProfile, "birthYear">,
+  currentYear: number
+) => currentYear - profile.birthYear;
+
 export const getCompatibilityScore = (
   player: Character,
   profile: Pick<DatingProfile, "traits" | "job" | "degree">
@@ -57,13 +62,14 @@ export const getCompatibilityScore = (
 
 export const calculateAttractivenessToPlayer = (
   player: Character,
-  profile: Pick<DatingProfile, "gender" | "age" | "appearance" | "traits" | "job" | "degree">
+  profile: Pick<DatingProfile, "gender" | "birthYear" | "appearance" | "traits" | "job" | "degree">,
+  currentYear: number
 ) => {
   let score = profile.appearance * 0.8;
   score += getCompatibilityScore(player, profile) * 0.2;
   score += randomInt(-5, 5);
 
-  const ageGap = Math.abs(player.age - profile.age);
+  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
   if (ageGap > 20 && Math.random() < 0.85) score -= 20;
   else if (ageGap > 10 && Math.random() < 0.55) score -= 10;
 
@@ -195,11 +201,12 @@ const getIncomeTierScore = (annualIncomeGBP: number) => {
 
 const getProfileAttractionToPlayer = (
   player: Character,
-  profile: Pick<DatingProfile, "appearance" | "intelligence" | "traits" | "job" | "degree" | "age">
+  profile: Pick<DatingProfile, "appearance" | "intelligence" | "traits" | "job" | "degree" | "birthYear">,
+  currentYear: number
 ) => {
   let score = player.appearance * 0.75 + getCompatibilityScore(player, profile) * 0.25;
 
-  const ageGap = Math.abs(player.age - profile.age);
+  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
   if (ageGap > 20) score -= 20;
   else if (ageGap > 10) score -= 10;
 
@@ -261,15 +268,16 @@ const getCompatibilityBreakdown = (
 export const getIndividualMatchChanceBreakdown = (
   player: Character,
   profile: DatingProfile,
-  householdReputation: number
+  householdReputation: number,
+  currentYear: number
 ) => {
   const compatibility = getCompatibilityBreakdown(player, profile);
   const mutualAttraction = Math.round(
     (profile.attractiveness +
-      getProfileAttractionToPlayer(player, profile)) /
+      getProfileAttractionToPlayer(player, profile, currentYear)) /
       2
   );
-  const ageGap = Math.abs(player.age - profile.age);
+  const ageGap = Math.abs(player.age - getDatingProfileAge(profile, currentYear));
   const intelligenceGap = Math.abs(player.intelligence - profile.intelligence);
   const incomeTierScore = getIncomeTierScore(player.annualIncomeGBP);
   const entries: MatchChanceBreakdownEntry[] = [{ label: "Base chance", value: 35 }];
@@ -333,9 +341,15 @@ export const getIndividualMatchChanceBreakdown = (
 export const getIndividualMatchChance = (
   player: Character,
   profile: DatingProfile,
-  householdReputation: number
+  householdReputation: number,
+  currentYear: number
 ) =>
-  getIndividualMatchChanceBreakdown(player, profile, householdReputation).finalChance;
+  getIndividualMatchChanceBreakdown(
+    player,
+    profile,
+    householdReputation,
+    currentYear
+  ).finalChance;
 
 export const getRoseMatchChance = (
   matchChance: number,
@@ -499,6 +513,7 @@ export const generateDatingProfiles = (
     const lastName = pickOne(LAST_NAMES_BY_NAME_POOL[namePool]);
     const firstName = pickOne(FIRST_NAMES_BY_NAME_POOL[namePool][gender]);
     const age = randomInt(minAge, maxAge);
+    const birthYear = currentYear - age;
     const appearance = randomInt(20, 100);
     const intelligence = randomInt(20, 100);
     const traits = pickUpToTwo(TRAITS, false);
@@ -520,7 +535,7 @@ export const generateDatingProfiles = (
       firstName,
       lastName,
       gender,
-      age,
+      birthYear,
       race,
       appearance,
       intelligence,
@@ -531,12 +546,12 @@ export const generateDatingProfiles = (
       traits,
       attractiveness: calculateAttractivenessToPlayer(player, {
         gender,
-        age,
+        birthYear,
         appearance,
         traits,
         job: age >= 18 ? jobListing.jobName : "No job",
         degree,
-      }),
+      }, currentYear),
       chemistry: calculateChemistryScore(player, {
         traits,
         job: age >= 18 ? jobListing.jobName : "No job",
@@ -548,6 +563,7 @@ export const generateDatingProfiles = (
       friendshipScore: 0,
       romanceScore: 0,
       matchChanceRandomness: randomInt(-6, 6),
+      roseMatchBoost: randomInt(10, 30),
       datingCharacteristics: [],
     };
 
