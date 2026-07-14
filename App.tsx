@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -217,195 +216,17 @@ type AppScreen =
   | "romance"
   | "datingApp"
   | "datingAppPreferences"
+  | "datingAppDiscover"
   | "datingAppMatches";
 
-type AgeRangeSliderProps = {
-  minimumAge: number;
-  maximumAge: number;
-  onChange: (minimumAge: number, maximumAge: number) => void;
-};
-
-function AgeRangeSlider({
-  minimumAge,
-  maximumAge,
-  onChange,
-}: AgeRangeSliderProps) {
-  const [trackWidth, setTrackWidth] = useState(0);
-  const minimumStartPositionRef = useRef(0);
-  const maximumStartPositionRef = useRef(0);
-  const activeTrackHandleRef = useRef<"minimum" | "maximum" | null>(null);
-
-  const clampPosition = (position: number) =>
-    Math.max(0, Math.min(position, trackWidth));
-
-  const positionToAge = (position: number) => {
-    if (trackWidth <= 0) {
-      return minimumAge;
-    }
-
-    const clampedPosition = clampPosition(position);
-    return (
-      MINIMUM_DATING_AGE +
-      Math.round(
-        (clampedPosition / trackWidth) *
-          (MAXIMUM_DATING_AGE - MINIMUM_DATING_AGE)
-      )
-    );
-  };
-
-  const ageToPosition = (age: number) => {
-    if (trackWidth <= 0) {
-      return 0;
-    }
-
-    return (
-      ((age - MINIMUM_DATING_AGE) /
-        (MAXIMUM_DATING_AGE - MINIMUM_DATING_AGE)) *
-      trackWidth
-    );
-  };
-
-  const updateMinimumFromPosition = (position: number) => {
-    const nextAge = positionToAge(position);
-    onChange(Math.min(nextAge, maximumAge), maximumAge);
-  };
-
-  const updateMaximumFromPosition = (position: number) => {
-    const nextAge = positionToAge(position);
-    onChange(minimumAge, Math.max(nextAge, minimumAge));
-  };
-
-  const minimumPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => trackWidth > 0,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        minimumStartPositionRef.current = ageToPosition(minimumAge);
-      },
-      onPanResponderMove: (_event, gestureState) => {
-        updateMinimumFromPosition(
-          minimumStartPositionRef.current + gestureState.dx
-        );
-      },
-    })
-  ).current;
-
-  const maximumPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => trackWidth > 0,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        maximumStartPositionRef.current = ageToPosition(maximumAge);
-      },
-      onPanResponderMove: (_event, gestureState) => {
-        updateMaximumFromPosition(
-          maximumStartPositionRef.current + gestureState.dx
-        );
-      },
-    })
-  ).current;
-
-  const trackPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => trackWidth > 0,
-      onMoveShouldSetPanResponder: () => trackWidth > 0,
-      onPanResponderGrant: (event) => {
-        const touchPosition = clampPosition(event.nativeEvent.locationX);
-        const minimumPosition = ageToPosition(minimumAge);
-        const maximumPosition = ageToPosition(maximumAge);
-        const minimumDistance = Math.abs(touchPosition - minimumPosition);
-        const maximumDistance = Math.abs(touchPosition - maximumPosition);
-
-        activeTrackHandleRef.current =
-          minimumDistance <= maximumDistance ? "minimum" : "maximum";
-        minimumStartPositionRef.current = minimumPosition;
-        maximumStartPositionRef.current = maximumPosition;
-
-        if (activeTrackHandleRef.current === "minimum") {
-          updateMinimumFromPosition(touchPosition);
-          minimumStartPositionRef.current = touchPosition;
-          return;
-        }
-
-        updateMaximumFromPosition(touchPosition);
-        maximumStartPositionRef.current = touchPosition;
-      },
-      onPanResponderMove: (_event, gestureState) => {
-        if (activeTrackHandleRef.current === "minimum") {
-          updateMinimumFromPosition(
-            minimumStartPositionRef.current + gestureState.dx
-          );
-          return;
-        }
-
-        if (activeTrackHandleRef.current === "maximum") {
-          updateMaximumFromPosition(
-            maximumStartPositionRef.current + gestureState.dx
-          );
-        }
-      },
-      onPanResponderRelease: () => {
-        activeTrackHandleRef.current = null;
-      },
-      onPanResponderTerminate: () => {
-        activeTrackHandleRef.current = null;
-      },
-    })
-  ).current;
-
-  const minimumPosition = ageToPosition(minimumAge);
-  const maximumPosition = ageToPosition(maximumAge);
-
-  return (
-    <View style={styles.sliderContainer}>
-      <View style={styles.sliderValueRow}>
-        <Text>{minimumAge}</Text>
-        <Text>{formatDatingAgeLabel(maximumAge)}</Text>
-      </View>
-
-      <View
-        {...trackPanResponder.panHandlers}
-        onLayout={(event) => {
-          setTrackWidth(event.nativeEvent.layout.width);
-        }}
-        style={styles.sliderTrack}
-      >
-        <View
-          style={[
-            styles.sliderActiveTrack,
-            {
-              left: minimumPosition,
-              width: Math.max(maximumPosition - minimumPosition, 0),
-            },
-          ]}
-        />
-
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.sliderTouchTarget,
-            styles.sliderTouchTargetMinimum,
-            { left: minimumPosition - 24 },
-          ]}
-          {...minimumPanResponder.panHandlers}
-        >
-          <View style={styles.sliderHandle} />
-        </View>
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.sliderTouchTarget,
-            styles.sliderTouchTargetMaximum,
-            { left: maximumPosition - 24 },
-          ]}
-          {...maximumPanResponder.panHandlers}
-        >
-          <View style={styles.sliderHandle} />
-        </View>
-      </View>
-    </View>
-  );
-}
+const isDatingProfileEligible = (
+  profile: DatingProfile,
+  ageFilter: DatingAgeFilter,
+  genderFilter: Preference
+) =>
+  profile.age >= ageFilter.minimumAge &&
+  profile.age <= ageFilter.maximumAge &&
+  (genderFilter === "Both" || profile.gender === genderFilter);
 
 export default function App() {
   const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
@@ -443,6 +264,9 @@ export default function App() {
   const [datingMatchesVisible, setDatingMatchesVisible] = useState(false);
   const [matchChanceBreakdownVisible, setMatchChanceBreakdownVisible] = useState(false);
   const [roseBoostByProfileId, setRoseBoostByProfileId] = useState<Record<string, number>>({});
+  const [datingRosesRemaining, setDatingRosesRemaining] = useState(3);
+  const [datingAppSettingsVisible, setDatingAppSettingsVisible] = useState(false);
+  const [datingEngineerViewVisible, setDatingEngineerViewVisible] = useState(false);
   const [lookForJobsVisible, setLookForJobsVisible] = useState(false);
   const [fullTimeJobsVisible, setFullTimeJobsVisible] = useState(false);
   const [partTimeJobsVisible, setPartTimeJobsVisible] = useState(false);
@@ -600,6 +424,9 @@ export default function App() {
 
     datingAgeFilterCharacterIdRef.current = currentCharacter.id;
     setDatingAgeFilter(getDefaultDatingAgeFilter(currentCharacterAge));
+    setDatingRosesRemaining(3);
+    setDatingAppSettingsVisible(false);
+    setDatingEngineerViewVisible(false);
   }, [currentCharacter.id, currentCharacterAge]);
 
   useEffect(() => {
@@ -706,6 +533,53 @@ export default function App() {
     };
   }, [household.country]);
 
+  const ensureDatingProfilesForCurrentPreferences = () => {
+    updateCurrentCharacter((character) => {
+      const eligibleProfiles = character.datingProfiles.filter((profile) =>
+        isDatingProfileEligible(profile, resolvedDatingAgeFilter, datingGenderFilter)
+      );
+
+      return {
+        ...character,
+        datingProfiles:
+          eligibleProfiles.length > 0
+            ? eligibleProfiles
+            : generateDatingProfiles(
+                character,
+                household.country,
+                resolvedDatingAgeFilter,
+                datingGenderFilter,
+                [],
+                createCharacter,
+                assignJobToCharacter,
+                pickDegreeForJob,
+                household.currentYear
+              ),
+      };
+    });
+  };
+
+  const openDatingDiscover = () => {
+    setCurrentScreen("datingAppDiscover");
+    setHousehold((currentHousehold) => ({
+      ...currentHousehold,
+      characters: currentHousehold.characters.map((character) =>
+        character.id === currentHousehold.currentCharacterId
+          ? {
+              ...character,
+              genderPreference: datingGenderFilter,
+            }
+          : character
+      ),
+    }));
+    ensureDatingProfilesForCurrentPreferences();
+    setDatingAppSettingsVisible(false);
+    setDatingEngineerViewVisible(false);
+    setDatingMatchesVisible(false);
+    setMatchChanceBreakdownVisible(false);
+    setSelectedDatingMatchId(null);
+  };
+
   const closeAllPanels = () => {
     setPlayerDetailsVisible(false);
     setFamilyVisible(false);
@@ -726,6 +600,8 @@ export default function App() {
     setDatingScoreInfoVisible(false);
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
+    setDatingAppSettingsVisible(false);
+    setDatingEngineerViewVisible(false);
     setLookForJobsVisible(false);
     setFullTimeJobsVisible(false);
     setPartTimeJobsVisible(false);
@@ -1217,13 +1093,90 @@ export default function App() {
 
           <View style={styles.detailGroup}>
             <Text style={styles.fieldSectionTitle}>Age Range</Text>
-            <AgeRangeSlider
-              minimumAge={resolvedDatingAgeFilter.minimumAge}
-              maximumAge={resolvedDatingAgeFilter.maximumAge}
-              onChange={(minimumAge, maximumAge) =>
-                setDatingAgeFilter({ minimumAge, maximumAge })
-              }
-            />
+            <View style={styles.ageSelectorsHeaderRow}>
+              <Text>Minimum Age</Text>
+              <Text>Maximum Age</Text>
+            </View>
+            <View style={styles.ageSelectorsRow}>
+              <View style={styles.ageSelector}>
+                <Pressable
+                  onPress={() =>
+                    setDatingAgeFilter((current) => {
+                      const filter =
+                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
+                      return {
+                        ...filter,
+                        minimumAge: Math.max(
+                          MINIMUM_DATING_AGE,
+                          filter.minimumAge - 1
+                        ),
+                      };
+                    })
+                  }
+                  style={styles.ageAdjustButton}
+                >
+                  <Text>-</Text>
+                </Pressable>
+                <Text>{resolvedDatingAgeFilter.minimumAge}</Text>
+                <Pressable
+                  onPress={() =>
+                    setDatingAgeFilter((current) => {
+                      const filter =
+                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
+                      return {
+                        ...filter,
+                        minimumAge: Math.min(
+                          filter.maximumAge,
+                          filter.minimumAge + 1
+                        ),
+                      };
+                    })
+                  }
+                  style={styles.ageAdjustButton}
+                >
+                  <Text>+</Text>
+                </Pressable>
+              </View>
+              <View style={styles.ageSelector}>
+                <Pressable
+                  onPress={() =>
+                    setDatingAgeFilter((current) => {
+                      const filter =
+                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
+                      return {
+                        ...filter,
+                        maximumAge: Math.max(
+                          filter.minimumAge,
+                          filter.maximumAge - 1
+                        ),
+                      };
+                    })
+                  }
+                  style={styles.ageAdjustButton}
+                >
+                  <Text>-</Text>
+                </Pressable>
+                <Text>{formatDatingAgeLabel(resolvedDatingAgeFilter.maximumAge)}</Text>
+                <Pressable
+                  onPress={() =>
+                    setDatingAgeFilter((current) => {
+                      const filter =
+                        current ?? getDefaultDatingAgeFilter(currentCharacterAge);
+                      return {
+                        ...filter,
+                        maximumAge: Math.min(
+                          MAXIMUM_DATING_AGE,
+                          filter.maximumAge + 1
+                        ),
+                      };
+                    })
+                  }
+                  style={styles.ageAdjustButton}
+                >
+                  <Text>+</Text>
+                </Pressable>
+              </View>
+            </View>
           </View>
 
           <View style={styles.detailGroup}>
@@ -1275,24 +1228,147 @@ export default function App() {
           </View>
 
           <Pressable
-            onPress={() => {
-              setHousehold((currentHousehold) => ({
-                ...currentHousehold,
-                characters: currentHousehold.characters.map((character) =>
-                  character.id === currentHousehold.currentCharacterId
-                    ? {
-                        ...character,
-                        genderPreference: datingGenderFilter,
-                      }
-                    : character
-                ),
-              }));
-              setCurrentScreen("datingAppMatches");
-            }}
+            onPress={openDatingDiscover}
             style={styles.box}
           >
             <Text>Create Profile</Text>
           </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "datingAppDiscover") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.discoverHeaderRow}>
+            <Pressable
+              onPress={() =>
+                setDatingAppSettingsVisible((current) => !current)
+              }
+              style={styles.headerSideButton}
+            >
+              <Text>Settings</Text>
+            </Pressable>
+            <View style={styles.appScreenHeaderTitleWrap}>
+              <Text style={styles.screenTitle}>Dating App</Text>
+            </View>
+            <View style={styles.discoverRoseBadge}>
+              <Text>{`Roses: ${datingRosesRemaining}/3`}</Text>
+            </View>
+          </View>
+
+          {datingAppSettingsVisible ? (
+            <View style={styles.detailBox}>
+              <Pressable
+                onPress={() => {
+                  setDatingAppSettingsVisible(false);
+                  setCurrentScreen("datingAppMatches");
+                }}
+                style={styles.innerBox}
+              >
+                <Text>See Matches</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setDatingAppSettingsVisible(false);
+                  setCurrentScreen("datingAppPreferences");
+                }}
+                style={styles.innerBox}
+              >
+                <Text>Update Preferences</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setDatingAppSettingsVisible(false);
+                  setCurrentScreen("datingApp");
+                }}
+                style={styles.innerBox}
+              >
+                <Text>Update Profile</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <View style={styles.discoverTitleRow}>
+            <View style={styles.detailGroup}>
+              <Text style={styles.sectionTitle}>Discover</Text>
+              <Text>Swipe to meet new people</Text>
+            </View>
+            <Pressable
+              onPress={() =>
+                setDatingEngineerViewVisible((current) => !current)
+              }
+              style={styles.engineerToggleButton}
+            >
+              <Text>E</Text>
+            </Pressable>
+          </View>
+
+          {currentDatingProfile ? (
+            <>
+              <View style={styles.box}>
+                <View style={styles.discoverProfileHeader}>
+                  <View style={styles.smallProfileIconBox}>
+                    <View style={styles.smallProfileIconHead} />
+                    <View style={styles.smallProfileIconBody} />
+                  </View>
+                  <View style={styles.detailGroup}>
+                    <Text>{`${currentDatingProfile.firstName} ${currentDatingProfile.lastName}`}</Text>
+                    <Text>{currentDatingProfile.age}</Text>
+                    <Text>{currentDatingProfile.job}</Text>
+                  </View>
+                </View>
+                <Text>{`Appearance: ${currentDatingProfile.appearance}`}</Text>
+                <Text>{`Attractiveness: ${currentDatingProfile.attractiveness}`}</Text>
+                {datingEngineerViewVisible ? (
+                  <View style={styles.detailGroup}>
+                    <Text>{`Intelligence: ${currentDatingProfile.intelligence}`}</Text>
+                    <Text>{`Chemistry: ${currentProfileChemistry ?? "???"}`}</Text>
+                    <Text>{`Match Chance: ${currentProfileMatchChance}%`}</Text>
+                    <Text>{`Rose Match Chance: ${currentProfileRoseMatchChance}%`}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.discoverActionRow}>
+                <Pressable
+                  onPress={() => passDatingProfile()}
+                  style={styles.discoverActionButton}
+                >
+                  <Text>Pass</Text>
+                </Pressable>
+                <Pressable
+                  disabled={datingMatchLimitReached}
+                  onPress={
+                    datingMatchLimitReached
+                      ? undefined
+                      : () => resolveDatingProfileAction("like")
+                  }
+                  style={styles.discoverActionButton}
+                >
+                  <Text>Like</Text>
+                </Pressable>
+                <Pressable
+                  disabled={datingRosesRemaining <= 0 || datingMatchLimitReached}
+                  onPress={
+                    datingRosesRemaining <= 0 || datingMatchLimitReached
+                      ? undefined
+                      : () => {
+                          setDatingRosesRemaining((current) => Math.max(0, current - 1));
+                          resolveDatingProfileAction("rose");
+                        }
+                  }
+                  style={styles.discoverActionButton}
+                >
+                  <Text>Send a Rose</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <Text>No more profiles available.</Text>
+          )}
         </ScrollView>
       </SafeAreaView>
     );
@@ -1304,7 +1380,7 @@ export default function App() {
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.appScreenHeader}>
             <Pressable
-              onPress={() => setCurrentScreen("datingAppPreferences")}
+              onPress={() => setCurrentScreen("datingAppDiscover")}
               style={styles.headerSideButton}
             >
               <Text>{"<"}</Text>
@@ -1312,23 +1388,7 @@ export default function App() {
             <View style={styles.appScreenHeaderTitleWrap}>
               <Text style={styles.screenTitle}>Dating App</Text>
             </View>
-            <Pressable
-              onPress={() => {
-                closeAllPanels();
-                setCurrentScreen("home");
-              }}
-              style={styles.headerSideButton}
-            >
-              <Text>X</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.progressRow}>
-            <Text>Profile</Text>
-            <View style={styles.progressLine} />
-            <Text>Preferences</Text>
-            <View style={styles.progressLine} />
-            <Text style={styles.progressStepActive}>Matches</Text>
+            <View style={styles.headerSideSpacer} />
           </View>
 
           <Text style={styles.sectionTitle}>Matches</Text>
@@ -1787,25 +1847,7 @@ export default function App() {
   };
 
   const startSwiping = () => {
-    updateCurrentCharacter((character) => {
-      return {
-        ...character,
-        datingProfiles:
-          character.datingProfiles.length > 0
-            ? character.datingProfiles
-            : generateDatingProfiles(
-                character,
-                household.country,
-                resolvedDatingAgeFilter,
-                datingGenderFilter,
-                [],
-                createCharacter,
-                assignJobToCharacter,
-                pickDegreeForJob,
-                household.currentYear
-              ),
-      };
-    });
+    ensureDatingProfilesForCurrentPreferences();
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
@@ -3529,6 +3571,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  discoverHeaderRow: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "center",
+  },
   headerSideButton: {
     borderWidth: 1,
     paddingHorizontal: 12,
@@ -3536,9 +3583,16 @@ const styles = StyleSheet.create({
     minWidth: 72,
     alignItems: "center",
   },
+  headerSideSpacer: {
+    minWidth: 72,
+  },
   appScreenHeaderTitleWrap: {
     flex: 1,
     alignItems: "center",
+  },
+  discoverRoseBadge: {
+    minWidth: 72,
+    alignItems: "flex-end",
   },
   screenTitle: {
     fontSize: 24,
@@ -3605,54 +3659,88 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 12,
   },
-  sliderContainer: {
-    alignSelf: "stretch",
-    gap: 12,
-  },
-  sliderValueRow: {
+  ageSelectorsHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-  },
-  sliderTrack: {
     alignSelf: "stretch",
-    height: 24,
+  },
+  ageSelectorsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignSelf: "stretch",
+    gap: 16,
+  },
+  ageSelector: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  ageAdjustButton: {
     borderWidth: 1,
-    justifyContent: "center",
-    position: "relative",
-    overflow: "visible",
-  },
-  sliderActiveTrack: {
-    position: "absolute",
-    top: 8,
-    height: 8,
-    backgroundColor: "#111111",
-    pointerEvents: "none",
-  },
-  sliderTouchTarget: {
-    position: "absolute",
-    top: -12,
-    width: 48,
-    height: 48,
+    minWidth: 48,
+    minHeight: 48,
     alignItems: "center",
     justifyContent: "center",
   },
-  sliderTouchTargetMinimum: {
-    zIndex: 3,
+  discoverTitleRow: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
   },
-  sliderTouchTargetMaximum: {
-    zIndex: 4,
+  engineerToggleButton: {
+    borderWidth: 1,
+    minWidth: 40,
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  sliderHandle: {
+  discoverProfileHeader: {
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  smallProfileIconBox: {
+    width: 56,
+    height: 64,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  smallProfileIconHead: {
     width: 24,
     height: 24,
     borderWidth: 1,
-    backgroundColor: "#ffffff",
+    borderRadius: 12,
   },
-  genderOptionRow: {
+  smallProfileIconBody: {
+    width: 40,
+    height: 28,
+    borderWidth: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderBottomLeftRadius: 6,
+    borderBottomRightRadius: 6,
+  },
+  discoverActionRow: {
+    alignSelf: "stretch",
     flexDirection: "row",
     gap: 8,
+  },
+  discoverActionButton: {
+    flex: 1,
+    borderWidth: 1,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  genderOptionRow: {
     alignSelf: "stretch",
+    flexDirection: "row",
+    gap: 8,
   },
   genderOption: {
     borderWidth: 1,
