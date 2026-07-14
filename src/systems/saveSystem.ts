@@ -226,6 +226,25 @@ const hydrateCharacter = (
   const datingMatches = Array.isArray(character.datingMatches)
     ? hydrateDatingProfiles(character.datingMatches)
     : [];
+  const datingDiscoveryState =
+    character.datingDiscoveryState &&
+    typeof character.datingDiscoveryState.year === "number" &&
+    Array.isArray(character.datingDiscoveryState.viewedProfileIds) &&
+    Array.isArray(character.datingDiscoveryState.passedProfileIds)
+      ? {
+          year: character.datingDiscoveryState.year,
+          viewedProfileIds: character.datingDiscoveryState.viewedProfileIds.filter(
+            (value): value is string => typeof value === "string"
+          ),
+          passedProfileIds: character.datingDiscoveryState.passedProfileIds.filter(
+            (value): value is string => typeof value === "string"
+          ),
+        }
+      : {
+          year: currentYear,
+          viewedProfileIds: [],
+          passedProfileIds: [],
+        };
   const partner = character.partner ? hydrateDatingProfile(character.partner) : null;
   const syncedCharacter = syncPersonAge(
     {
@@ -249,6 +268,7 @@ const hydrateCharacter = (
       romanticRelationships,
       datingProfiles,
       datingMatches,
+      datingDiscoveryState,
       partner,
     },
     currentYear
@@ -287,6 +307,7 @@ const hydrateCharacter = (
     character.romanticRelationships === romanticRelationships &&
     character.datingProfiles === resolvedCharacter.datingProfiles &&
     character.datingMatches === resolvedCharacter.datingMatches &&
+    character.datingDiscoveryState === datingDiscoveryState &&
     character.partner === resolvedCharacter.partner
   ) {
     return character;
@@ -318,6 +339,7 @@ const hydrateCharacter = (
     romanticRelationships,
     datingProfiles: resolvedCharacter.datingProfiles,
     datingMatches: resolvedCharacter.datingMatches,
+    datingDiscoveryState,
     partner: resolvedCharacter.partner,
   };
 };

@@ -136,6 +136,11 @@ export const createCharacter = (
     genderPreference: "Both",
     datingProfiles: [],
     datingMatches: [],
+    datingDiscoveryState: {
+      year: currentYear,
+      viewedProfileIds: [],
+      passedProfileIds: [],
+    },
     romanticRelationships: [],
     partner: null,
     datingRefreshesRemaining: 2,

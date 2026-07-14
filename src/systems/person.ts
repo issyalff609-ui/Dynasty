@@ -356,6 +356,11 @@ export const promoteNpcToPerson = (
     genderPreference: "Both",
     datingProfiles: [],
     datingMatches: [],
+    datingDiscoveryState: {
+      year: birthYear,
+      viewedProfileIds: [],
+      passedProfileIds: [],
+    },
     romanticRelationships: [],
     partner: null,
     datingRefreshesRemaining: 2,

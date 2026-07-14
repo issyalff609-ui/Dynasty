@@ -142,6 +142,12 @@ export type RelationshipPreferences = {
   relationshipStylePreference: RelationshipStylePreference;
 };
 
+export type DatingDiscoveryState = {
+  year: number;
+  viewedProfileIds: string[];
+  passedProfileIds: string[];
+};
+
 export type RecentRelationshipLifeEventType =
   | "death_of_parent"
   | "job_loss"
@@ -202,6 +208,7 @@ export type Person = {
   genderPreference: Preference;
   datingProfiles: DatingProfile[];
   datingMatches: DatingProfile[];
+  datingDiscoveryState: DatingDiscoveryState;
   romanticRelationships: RomanticRelationship[];
   partner: DatingProfile | null;
   datingRefreshesRemaining: number;
