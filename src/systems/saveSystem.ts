@@ -66,6 +66,29 @@ export type LoadHouseholdResult = {
   notice: string | null;
 };
 
+type StorageBackendKind = "web" | "native";
+
+type StorageReadResult =
+  | {
+      success: true;
+      value: string | null;
+      backend: StorageBackendKind;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type StorageWriteResult =
+  | {
+      success: true;
+      backend: StorageBackendKind;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
 type StoredHouseholdParseResult =
   | {
       success: true;
@@ -79,7 +102,7 @@ type StoredHouseholdParseResult =
       error: string;
     };
 
-type ManualLifeSaveSlotsResult =
+export type ManualLifeSaveSlotsResult =
   | {
       success: true;
       slots: ManualLifeSaveSlot[];
@@ -89,7 +112,7 @@ type ManualLifeSaveSlotsResult =
       error: string;
     };
 
-type ManualLifeSaveOperationResult =
+export type ManualLifeSaveOperationResult =
   | {
       success: true;
       slot: ManualLifeSaveSlot;
@@ -99,7 +122,7 @@ type ManualLifeSaveOperationResult =
       error: string;
     };
 
-type LoadLifeFromSlotResult =
+export type LoadLifeFromSlotResult =
   | {
       success: true;
       household: Household;
@@ -110,7 +133,7 @@ type LoadLifeFromSlotResult =
       error: string;
     };
 
-type DeleteLifeSaveResult =
+export type DeleteLifeSaveResult =
   | {
       success: true;
       slotId: ManualSaveSlotId;
@@ -119,6 +142,22 @@ type DeleteLifeSaveResult =
       success: false;
       error: string;
     };
+
+export type SaveHouseholdToStorageResult =
+  | {
+      success: true;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type StorageAdapter = {
+  kind: StorageBackendKind;
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -738,24 +777,89 @@ const parseStoredHousehold = (
   };
 };
 
+let storageAdapterOverride: StorageAdapter | null = null;
+let asyncStorageAdapterPromise: Promise<StorageAdapter | null> | null = null;
+
 const canUseLocalStorage = () => typeof globalThis.localStorage !== "undefined";
 
-const getStorageItem = (key: string) => {
+const getWebStorageAdapter = (): StorageAdapter | null => {
   if (!canUseLocalStorage()) {
+    return null;
+  }
+
+  return {
+    kind: "web",
+    async getItem(key) {
+      return globalThis.localStorage.getItem(key);
+    },
+    async setItem(key, value) {
+      globalThis.localStorage.setItem(key, value);
+    },
+    async removeItem(key) {
+      globalThis.localStorage.removeItem(key);
+    },
+  };
+};
+
+const loadAsyncStorageAdapter = async (): Promise<StorageAdapter | null> => {
+  if (asyncStorageAdapterPromise !== null) {
+    return asyncStorageAdapterPromise;
+  }
+
+  asyncStorageAdapterPromise = import("@react-native-async-storage/async-storage")
+    .then((module) => {
+      const asyncStorage = module.default;
+      if (!asyncStorage) {
+        return null;
+      }
+
+      return {
+        kind: "native" as const,
+        getItem: (key: string) => asyncStorage.getItem(key),
+        setItem: (key: string, value: string) => asyncStorage.setItem(key, value),
+        removeItem: (key: string) => asyncStorage.removeItem(key),
+      };
+    })
+    .catch(() => null);
+
+  return asyncStorageAdapterPromise;
+};
+
+const getStorageAdapter = async (): Promise<StorageAdapter | null> => {
+  if (storageAdapterOverride !== null) {
+    return storageAdapterOverride;
+  }
+
+  return getWebStorageAdapter() ?? (await loadAsyncStorageAdapter());
+};
+
+export const setStorageAdapterOverrideForTests = (adapter: StorageAdapter | null) => {
+  storageAdapterOverride = adapter;
+};
+
+export const resetStorageAdapterOverrideForTests = () => {
+  storageAdapterOverride = null;
+  asyncStorageAdapterPromise = null;
+};
+
+export const getStorageItem = async (key: string): Promise<StorageReadResult> => {
+  const storageAdapter = await getStorageAdapter();
+  if (!storageAdapter) {
     return {
-      success: false as const,
-      error: "Persistent storage is unavailable in this environment.",
+      success: false,
+      error: "Persistent storage is unavailable.",
     };
   }
 
   try {
     return {
-      success: true as const,
-      value: globalThis.localStorage.getItem(key),
+      success: true,
+      value: await storageAdapter.getItem(key),
+      backend: storageAdapter.kind,
     };
   } catch (error) {
     return {
-      success: false as const,
+      success: false,
       error:
         error instanceof Error && error.message
           ? `Persistent storage could not be read: ${error.message}`
@@ -764,22 +868,27 @@ const getStorageItem = (key: string) => {
   }
 };
 
-const setStorageItem = (key: string, value: string) => {
-  if (!canUseLocalStorage()) {
+export const setStorageItem = async (
+  key: string,
+  value: string
+): Promise<StorageWriteResult> => {
+  const storageAdapter = await getStorageAdapter();
+  if (!storageAdapter) {
     return {
-      success: false as const,
-      error: "Persistent storage is unavailable in this environment.",
+      success: false,
+      error: "Persistent storage is unavailable.",
     };
   }
 
   try {
-    globalThis.localStorage.setItem(key, value);
+    await storageAdapter.setItem(key, value);
     return {
-      success: true as const,
+      success: true,
+      backend: storageAdapter.kind,
     };
   } catch (error) {
     return {
-      success: false as const,
+      success: false,
       error:
         error instanceof Error && error.message
           ? `Persistent storage could not be written: ${error.message}`
@@ -788,22 +897,24 @@ const setStorageItem = (key: string, value: string) => {
   }
 };
 
-const removeStorageItem = (key: string) => {
-  if (!canUseLocalStorage()) {
+export const removeStorageItem = async (key: string): Promise<StorageWriteResult> => {
+  const storageAdapter = await getStorageAdapter();
+  if (!storageAdapter) {
     return {
-      success: false as const,
-      error: "Persistent storage is unavailable in this environment.",
+      success: false,
+      error: "Persistent storage is unavailable.",
     };
   }
 
   try {
-    globalThis.localStorage.removeItem(key);
+    await storageAdapter.removeItem(key);
     return {
-      success: true as const,
+      success: true,
+      backend: storageAdapter.kind,
     };
   } catch (error) {
     return {
-      success: false as const,
+      success: false,
       error:
         error instanceof Error && error.message
           ? `Persistent storage could not be updated: ${error.message}`
@@ -812,10 +923,10 @@ const removeStorageItem = (key: string) => {
   }
 };
 
-export const loadOrCreateHousehold = (
+export const loadOrCreateHousehold = async (
   createHousehold: () => Household
-): LoadHouseholdResult => {
-  const primaryRead = getStorageItem(HOUSEHOLD_STORAGE_KEY);
+): Promise<LoadHouseholdResult> => {
+  const primaryRead = await getStorageItem(HOUSEHOLD_STORAGE_KEY);
   if (!primaryRead.success) {
     return {
       household: hydrateHousehold(createHousehold()),
@@ -846,7 +957,7 @@ export const loadOrCreateHousehold = (
     console.warn(primaryError);
   }
 
-  const backupRead = getStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY);
+  const backupRead = await getStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY);
   if (!backupRead.success) {
     return {
       household: hydrateHousehold(createHousehold()),
@@ -936,49 +1047,68 @@ const buildManualLifeSaveSlot = (
 export const getEmptyManualLifeSaveSlots = () =>
   MANUAL_SAVE_SLOT_IDS.map((slotId) => buildManualLifeSaveSlot(slotId, null));
 
-export const saveHouseholdToStorage = (household: Household) => {
-  if (!canUseLocalStorage() || !isHouseholdLike(household)) {
-    return false;
+export const saveHouseholdToStorage = async (
+  household: Household
+): Promise<SaveHouseholdToStorageResult> => {
+  if (!isHouseholdLike(household)) {
+    return {
+      success: false,
+      error: "Your life could not be saved.",
+    };
   }
 
   let serializedSave: string;
   try {
     serializedSave = JSON.stringify(buildGameSave(household));
-  } catch {
-    return false;
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error && error.message
+          ? `Your life could not be saved. ${error.message}`
+          : "Your life could not be saved.",
+    };
   }
 
-  try {
-    const currentPrimaryRead = getStorageItem(HOUSEHOLD_STORAGE_KEY);
-    if (!currentPrimaryRead.success) {
-      return false;
-    }
-    const currentPrimary = currentPrimaryRead.value;
-    if (currentPrimary) {
-      const parsedCurrentPrimary = parseStoredHousehold(currentPrimary);
-      if (parsedCurrentPrimary.success) {
-        const backupWrite = setStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY, currentPrimary);
-        if (!backupWrite.success) {
-          return false;
-        }
-      }
-    }
-
-    const primaryWrite = setStorageItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
-    if (!primaryWrite.success) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
+  const currentPrimaryRead = await getStorageItem(HOUSEHOLD_STORAGE_KEY);
+  if (!currentPrimaryRead.success) {
+    return {
+      success: false,
+      error: currentPrimaryRead.error,
+    };
   }
+
+  if (currentPrimaryRead.value) {
+    const backupWrite = await setStorageItem(
+      HOUSEHOLD_BACKUP_STORAGE_KEY,
+      currentPrimaryRead.value
+    );
+    if (!backupWrite.success) {
+      return {
+        success: false,
+        error: `Your life could not be saved. ${backupWrite.error}`,
+      };
+    }
+  }
+
+  const primaryWrite = await setStorageItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
+  if (!primaryWrite.success) {
+    return {
+      success: false,
+      error: `Your life could not be saved. ${primaryWrite.error}`,
+    };
+  }
+
+  return {
+    success: true,
+  };
 };
 
-export const getManualLifeSaves = (): ManualLifeSaveSlotsResult => {
+export const getManualLifeSaves = async (): Promise<ManualLifeSaveSlotsResult> => {
   const slots = getEmptyManualLifeSaveSlots();
 
   for (const slotId of MANUAL_SAVE_SLOT_IDS) {
-    const readResult = getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+    const readResult = await getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
     if (!readResult.success) {
       return {
         success: false,
@@ -1018,10 +1148,10 @@ export const getManualLifeSaves = (): ManualLifeSaveSlotsResult => {
   };
 };
 
-export const saveLifeToSlot = (
+export const saveLifeToSlot = async (
   slotId: ManualSaveSlotId,
   household: Household
-): ManualLifeSaveOperationResult => {
+): Promise<ManualLifeSaveOperationResult> => {
   if (!isManualSaveSlotId(slotId)) {
     return {
       success: false,
@@ -1047,7 +1177,7 @@ export const saveLifeToSlot = (
     };
   }
 
-  const writeResult = setStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId], serializedSave);
+  const writeResult = await setStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId], serializedSave);
   if (!writeResult.success) {
     return {
       success: false,
@@ -1064,7 +1194,9 @@ export const saveLifeToSlot = (
   };
 };
 
-export const loadLifeFromSlot = (slotId: ManualSaveSlotId): LoadLifeFromSlotResult => {
+export const loadLifeFromSlot = async (
+  slotId: ManualSaveSlotId
+): Promise<LoadLifeFromSlotResult> => {
   if (!isManualSaveSlotId(slotId)) {
     return {
       success: false,
@@ -1072,7 +1204,7 @@ export const loadLifeFromSlot = (slotId: ManualSaveSlotId): LoadLifeFromSlotResu
     };
   }
 
-  const readResult = getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+  const readResult = await getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
   if (!readResult.success) {
     return {
       success: false,
@@ -1109,7 +1241,9 @@ export const loadLifeFromSlot = (slotId: ManualSaveSlotId): LoadLifeFromSlotResu
   };
 };
 
-export const deleteLifeSave = (slotId: ManualSaveSlotId): DeleteLifeSaveResult => {
+export const deleteLifeSave = async (
+  slotId: ManualSaveSlotId
+): Promise<DeleteLifeSaveResult> => {
   if (!isManualSaveSlotId(slotId)) {
     return {
       success: false,
@@ -1117,7 +1251,7 @@ export const deleteLifeSave = (slotId: ManualSaveSlotId): DeleteLifeSaveResult =
     };
   }
 
-  const deleteResult = removeStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+  const deleteResult = await removeStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
   if (!deleteResult.success) {
     return {
       success: false,

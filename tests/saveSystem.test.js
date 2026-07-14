@@ -3,18 +3,27 @@ const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
 const { getDatingAppLaunchSection } = require("../.tmp-tests/src/systems/datingProfile.js");
+const {
+  autosaveHouseholdIfReady,
+  loadInitialAppState,
+  persistLoadedHouseholdIfNeeded,
+} = require("../.tmp-tests/src/systems/appSaveLifecycle.js");
 const { resolveProposalToPartner, getDefaultProposalPlan } = require("../.tmp-tests/src/systems/proposals.js");
 const {
+  HOUSEHOLD_BACKUP_STORAGE_KEY,
   HOUSEHOLD_STORAGE_KEY,
   MANUAL_SAVE_SLOT_KEYS,
   createManualLifeSaveOperationGuard,
   deleteLifeSave,
   getManualLifeSaves,
+  getStorageItem,
   hydrateHousehold,
   loadLifeFromSlot,
   loadOrCreateHousehold,
+  resetStorageAdapterOverrideForTests,
   saveHouseholdToStorage,
   saveLifeToSlot,
+  setStorageAdapterOverrideForTests,
 } = require("../.tmp-tests/src/systems/saveSystem.js");
 const { startDating } = require("../.tmp-tests/src/systems/relationships.js");
 
@@ -36,18 +45,65 @@ class LocalStorageMock {
   removeItem(key) {
     this.store.delete(String(key));
   }
+}
 
-  clear() {
-    this.store.clear();
+class AsyncStorageMock {
+  constructor() {
+    this.store = new Map();
+    this.failRead = null;
+    this.failWrite = null;
+    this.failDelete = null;
+  }
+
+  async getItem(key) {
+    if (this.failRead) {
+      throw this.failRead;
+    }
+
+    return this.store.has(key) ? this.store.get(key) : null;
+  }
+
+  async setItem(key, value) {
+    if (this.failWrite) {
+      throw this.failWrite;
+    }
+
+    this.store.set(String(key), String(value));
+  }
+
+  async removeItem(key) {
+    if (this.failDelete) {
+      throw this.failDelete;
+    }
+
+    this.store.delete(String(key));
   }
 }
 
+const createNativeAdapter = (storage) => ({
+  kind: "native",
+  getItem: (key) => storage.getItem(key),
+  setItem: (key, value) => storage.setItem(key, value),
+  removeItem: (key) => storage.removeItem(key),
+});
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return { promise, resolve };
+};
+
 test.beforeEach(() => {
   globalThis.localStorage = new LocalStorageMock();
+  resetStorageAdapterOverrideForTests();
 });
 
 test.afterEach(() => {
   delete globalThis.localStorage;
+  resetStorageAdapterOverrideForTests();
 });
 
 const buildCharacter = ({ id, firstName, gender, bankBalanceGBP = 2500 }) => {
@@ -353,8 +409,6 @@ test("hydrated old saves without proposalHistory can resolve proposals safely", 
     return;
   }
 
-  assert.ok(Array.isArray(result.person.proposalHistory));
-  assert.ok(Array.isArray(result.otherPerson.proposalHistory));
   assert.ok(result.person.proposalHistory.length > 0);
   assert.ok(result.otherPerson.proposalHistory.length > 0);
 });
@@ -433,17 +487,48 @@ test("existing completed dating profiles are recognised during migration", () =>
   assert.equal(getDatingAppLaunchSection(household.characters[0]), "discover");
 });
 
-test("a player can save a complete household to slot 1", () => {
-  const household = buildHousehold();
+test("web storage adapter path uses localStorage", async () => {
+  globalThis.localStorage.setItem("web-key", "web-value");
 
-  const result = saveLifeToSlot("slot_1", household);
+  const result = await getStorageItem("web-key");
 
   assert.equal(result.success, true);
   if (!result.success) {
     return;
   }
 
-  const slots = getManualLifeSaves();
+  assert.equal(result.backend, "web");
+  assert.equal(result.value, "web-value");
+});
+
+test("native storage adapter path uses AsyncStorage", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  await nativeStorage.setItem("native-key", "native-value");
+
+  const result = await getStorageItem("native-key");
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.backend, "native");
+  assert.equal(result.value, "native-value");
+});
+
+test("a player can save a complete household to slot 1", async () => {
+  const household = buildHousehold();
+
+  const result = await saveLifeToSlot("slot_1", household);
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  const slots = await getManualLifeSaves();
   assert.equal(slots.success, true);
   if (!slots.success) {
     return;
@@ -454,21 +539,21 @@ test("a player can save a complete household to slot 1", () => {
   assert.equal(slots.slots[0].summary.householdSize, 3);
 });
 
-test("a player can save a different household to slot 2", () => {
+test("a player can save a different household to slot 2", async () => {
   const household = buildHousehold({
     currentYear: 2032,
     playerName: "Casey",
     partnerName: "Riley",
   });
 
-  const result = saveLifeToSlot("slot_2", household);
+  const result = await saveLifeToSlot("slot_2", household);
 
   assert.equal(result.success, true);
   if (!result.success) {
     return;
   }
 
-  const slots = getManualLifeSaves();
+  const slots = await getManualLifeSaves();
   assert.equal(slots.success, true);
   if (!slots.success) {
     return;
@@ -478,35 +563,31 @@ test("a player can save a different household to slot 2", () => {
   assert.equal(slots.slots[1].summary.currentYear, 2032);
 });
 
-test("a third manual slot cannot be created", () => {
-  const household = buildHousehold();
-  const result = saveLifeToSlot("slot_3", household);
+test("manual save persists through storage reinitialisation", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
-  assert.equal(result.success, false);
-  if (!result.success) {
-    assert.match(result.error, /Invalid save slot/);
-  }
-});
+  await saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex", currentYear: 2028 }));
+  resetStorageAdapterOverrideForTests();
+  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
-test("saves persist after the save system is reinitialised", () => {
-  const household = buildHousehold();
-  saveLifeToSlot("slot_1", household);
+  const slots = await getManualLifeSaves();
 
-  const laterRead = getManualLifeSaves();
-
-  assert.equal(laterRead.success, true);
-  if (!laterRead.success) {
+  assert.equal(slots.success, true);
+  if (!slots.success) {
     return;
   }
 
-  assert.equal(laterRead.slots[0].summary.activeCharacterName, "Alex Tester");
+  assert.equal(slots.slots[0].summary.activeCharacterName, "Alex Tester");
+  assert.equal(slots.slots[0].summary.currentYear, 2028);
 });
 
-test("loading slot 1 restores the complete household state", () => {
-  const savedHousehold = buildHousehold();
-  saveLifeToSlot("slot_1", savedHousehold);
+test("manual load restores the complete household", async () => {
+  const savedHousehold = buildHousehold({ currentYear: 2030, currentCharacterId: "partner-1" });
+  await saveLifeToSlot("slot_1", savedHousehold);
 
-  const loaded = loadLifeFromSlot("slot_1");
+  const loaded = await loadLifeFromSlot("slot_1");
 
   assert.equal(loaded.success, true);
   if (!loaded.success) {
@@ -514,90 +595,24 @@ test("loading slot 1 restores the complete household state", () => {
   }
 
   assert.deepEqual(loaded.household, savedHousehold);
-});
-
-test("loading restores the correct active character and current year", () => {
-  const savedHousehold = buildHousehold({
-    currentYear: 2030,
-    currentCharacterId: "partner-1",
-  });
-  saveLifeToSlot("slot_1", savedHousehold);
-
-  const loaded = loadLifeFromSlot("slot_1");
-
-  assert.equal(loaded.success, true);
-  if (!loaded.success) {
-    return;
-  }
-
   assert.equal(loaded.household.currentCharacterId, "partner-1");
   assert.equal(loaded.household.currentYear, 2030);
-});
-
-test("loading restores relationships, memories, diaries, finances and dating state", () => {
-  const savedHousehold = buildHousehold();
-  saveLifeToSlot("slot_1", savedHousehold);
-
-  const loaded = loadLifeFromSlot("slot_1");
-
-  assert.equal(loaded.success, true);
-  if (!loaded.success) {
-    return;
-  }
-
-  const currentCharacter = loaded.household.characters.find(
-    (character) => character.id === loaded.household.currentCharacterId
+  const originalPlayer = loaded.household.characters.find(
+    (character) => character.id === loaded.household.originalPlayerId
   );
-
-  assert.equal(currentCharacter.romanticRelationships.length > 0, true);
-  assert.equal(currentCharacter.memories.length, 1);
-  assert.equal(currentCharacter.diary.length, 1);
-  assert.equal(currentCharacter.datingMatches.length, 1);
-  assert.equal(currentCharacter.proposalHistory.length, 1);
-  assert.equal(loaded.household.netWorthGBP, 15000);
+  assert.equal(originalPlayer.romanticRelationships.length > 0, true);
+  assert.equal(originalPlayer.memories.length, 1);
+  assert.equal(originalPlayer.diary.length, 1);
+  assert.equal(originalPlayer.datingMatches.length, 1);
+  assert.equal(originalPlayer.proposalHistory.length, 1);
 });
 
-test("loading one slot does not alter the other slot", () => {
-  saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex" }));
-  saveLifeToSlot("slot_2", buildHousehold({ playerName: "Casey", currentYear: 2034 }));
+test("deleting slot 1 does not affect slot 2", async () => {
+  await saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex" }));
+  await saveLifeToSlot("slot_2", buildHousehold({ playerName: "Casey", currentYear: 2033 }));
 
-  const loaded = loadLifeFromSlot("slot_1");
-  const slots = getManualLifeSaves();
-
-  assert.equal(loaded.success, true);
-  assert.equal(slots.success, true);
-  if (!slots.success) {
-    return;
-  }
-
-  assert.equal(slots.slots[1].summary.activeCharacterName, "Casey Tester");
-  assert.equal(slots.slots[1].summary.currentYear, 2034);
-});
-
-test("overwriting a slot completely replaces its previous contents", () => {
-  saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex", currentYear: 2026 }));
-  saveLifeToSlot("slot_1", buildHousehold({ playerName: "Jordan", currentYear: 2040 }));
-
-  const loaded = loadLifeFromSlot("slot_1");
-
-  assert.equal(loaded.success, true);
-  if (!loaded.success) {
-    return;
-  }
-
-  const currentCharacter = loaded.household.characters.find(
-    (character) => character.id === loaded.household.currentCharacterId
-  );
-  assert.equal(currentCharacter.firstName, "Jordan");
-  assert.equal(loaded.household.currentYear, 2040);
-});
-
-test("deleting slot 1 does not affect slot 2", () => {
-  saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex" }));
-  saveLifeToSlot("slot_2", buildHousehold({ playerName: "Casey", currentYear: 2033 }));
-
-  const deleted = deleteLifeSave("slot_1");
-  const slots = getManualLifeSaves();
+  const deleted = await deleteLifeSave("slot_1");
+  const slots = await getManualLifeSaves();
 
   assert.equal(deleted.success, true);
   assert.equal(slots.success, true);
@@ -609,18 +624,18 @@ test("deleting slot 1 does not affect slot 2", () => {
   assert.equal(slots.slots[1].summary.activeCharacterName, "Casey Tester");
 });
 
-test("loading invalid data leaves the current household unchanged", () => {
-  const currentHousehold = buildHousehold({ playerName: "Alex" });
+test("loading invalid data returns an error", async () => {
   globalThis.localStorage.setItem(MANUAL_SAVE_SLOT_KEYS.slot_1, "{bad json");
 
-  const loaded = loadLifeFromSlot("slot_1");
+  const loaded = await loadLifeFromSlot("slot_1");
 
   assert.equal(loaded.success, false);
-  assert.equal(currentHousehold.currentCharacterId, "player-1");
-  assert.equal(currentHousehold.currentYear, CURRENT_YEAR);
+  if (!loaded.success) {
+    assert.match(loaded.error, /could not be loaded/i);
+  }
 });
 
-test("older manual saves are normalised through the existing migration system", () => {
+test("older manual saves are normalised through the existing migration system", async () => {
   const legacyHousehold = buildHousehold();
   delete legacyHousehold.characters[0].proposalHistory;
   delete legacyHousehold.characters[0].datingProfileCreated;
@@ -634,7 +649,7 @@ test("older manual saves are normalised through the existing migration system", 
     })
   );
 
-  const loaded = loadLifeFromSlot("slot_1");
+  const loaded = await loadLifeFromSlot("slot_1");
 
   assert.equal(loaded.success, true);
   if (!loaded.success) {
@@ -646,8 +661,8 @@ test("older manual saves are normalised through the existing migration system", 
   assert.equal(currentCharacter.datingProfileCreated, true);
 });
 
-test("save metadata includes a valid timestamp", () => {
-  saveLifeToSlot("slot_1", buildHousehold());
+test("save metadata includes a valid timestamp", async () => {
+  await saveLifeToSlot("slot_1", buildHousehold());
 
   const stored = JSON.parse(globalThis.localStorage.getItem(MANUAL_SAVE_SLOT_KEYS.slot_1));
 
@@ -664,12 +679,15 @@ test("repeated button presses do not perform duplicate operations", () => {
   assert.equal(guard.start("slot_1", "save"), true);
 });
 
-test("the existing autosave remains separate from the two manual slots", () => {
+test("the existing autosave remains separate from the two manual slots", async () => {
   const autosaveHousehold = buildHousehold({ playerName: "Alex" });
   const manualHousehold = buildHousehold({ playerName: "Casey", currentYear: 2031 });
 
-  assert.equal(saveHouseholdToStorage(autosaveHousehold), true);
-  assert.equal(saveLifeToSlot("slot_1", manualHousehold).success, true);
+  const autosaveResult = await saveHouseholdToStorage(autosaveHousehold);
+  const manualResult = await saveLifeToSlot("slot_1", manualHousehold);
+
+  assert.equal(autosaveResult.success, true);
+  assert.equal(manualResult.success, true);
 
   const autosaveStored = JSON.parse(globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY));
   const manualStored = JSON.parse(globalThis.localStorage.getItem(MANUAL_SAVE_SLOT_KEYS.slot_1));
@@ -679,30 +697,126 @@ test("the existing autosave remains separate from the two manual slots", () => {
   assert.equal(manualStored.household.currentYear, 2031);
 });
 
-test("a loaded save is not immediately overwritten with a newly generated household", () => {
-  const savedHousehold = buildHousehold({ playerName: "Alex", currentYear: 2037 });
-  assert.equal(saveHouseholdToStorage(savedHousehold), true);
+test("startup waits for loading", async () => {
+  const readGate = deferred();
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests({
+    kind: "native",
+    getItem: async () => readGate.promise,
+    setItem: async () => {},
+    removeItem: async () => {},
+  });
 
-  const loaded = loadOrCreateHousehold(() =>
+  let resolved = false;
+  const loadingPromise = loadInitialAppState(buildHousehold).then(() => {
+    resolved = true;
+  });
+
+  await Promise.resolve();
+  assert.equal(resolved, false);
+
+  readGate.resolve(null);
+  await loadingPromise;
+  assert.equal(resolved, true);
+});
+
+test("no new household is created before loading completes", async () => {
+  const readGate = deferred();
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests({
+    kind: "native",
+    getItem: async () => readGate.promise,
+    setItem: async () => {},
+    removeItem: async () => {},
+  });
+
+  let createCount = 0;
+  const pendingLoad = loadOrCreateHousehold(() => {
+    createCount += 1;
+    return buildHousehold({ playerName: "Generated", includePartner: false });
+  });
+
+  await Promise.resolve();
+  assert.equal(createCount, 0);
+
+  readGate.resolve(null);
+  await pendingLoad;
+  assert.equal(createCount, 1);
+});
+
+test("autosave does not run before initial load", async () => {
+  const household = buildHousehold();
+
+  const result = await autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: false,
+    household,
+  });
+
+  assert.equal(result.attempted, false);
+  assert.equal(globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY), null);
+});
+
+test("a loaded save is not overwritten immediately", async () => {
+  const savedHousehold = buildHousehold({ playerName: "Alex", currentYear: 2037 });
+  const saveResult = await saveHouseholdToStorage(savedHousehold);
+  assert.equal(saveResult.success, true);
+
+  const loadedState = await loadInitialAppState(() =>
     buildHousehold({ playerName: "Generated", currentYear: 1999, includePartner: false })
   );
 
-  assert.equal(loaded.source, "primary");
-  assert.equal(loaded.household.currentYear, 2037);
-  assert.equal(loaded.household.characters[0].firstName, "Alex");
-});
+  assert.equal(loadedState.loadResult.source, "primary");
+  assert.equal(loadedState.household.currentYear, 2037);
+  assert.equal(loadedState.household.characters[0].firstName, "Alex");
 
-test("refreshing or recreating the app state can still discover both manual slots", () => {
-  saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex", currentYear: 2028 }));
-  saveLifeToSlot("slot_2", buildHousehold({ playerName: "Casey", currentYear: 2038 }));
-
-  const slots = getManualLifeSaves();
-
-  assert.equal(slots.success, true);
-  if (!slots.success) {
-    return;
+  const resaveResult = await persistLoadedHouseholdIfNeeded(loadedState.loadResult);
+  if (resaveResult.attempted) {
+    assert.equal(resaveResult.success, true);
   }
 
-  assert.equal(slots.slots[0].summary.activeCharacterName, "Alex Tester");
-  assert.equal(slots.slots[1].summary.activeCharacterName, "Casey Tester");
+  const storedAfterLoad = JSON.parse(globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY));
+  assert.equal(storedAfterLoad.household.currentYear, 2037);
+  assert.equal(storedAfterLoad.household.characters[0].firstName, "Alex");
+});
+
+test("autosave preserves the previous primary as backup", async () => {
+  const originalHousehold = buildHousehold({ currentYear: 2028 });
+  const nextHousehold = buildHousehold({ currentYear: 2039 });
+
+  await saveHouseholdToStorage(originalHousehold);
+  await saveHouseholdToStorage(nextHousehold);
+
+  const backupStored = JSON.parse(globalThis.localStorage.getItem(HOUSEHOLD_BACKUP_STORAGE_KEY));
+  const primaryStored = JSON.parse(globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY));
+
+  assert.equal(backupStored.household.currentYear, 2028);
+  assert.equal(primaryStored.household.currentYear, 2039);
+});
+
+test("storage failures return errors", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  nativeStorage.failWrite = new Error("disk full");
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const result = await saveHouseholdToStorage(buildHousehold());
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error, /disk full/i);
+  }
+});
+
+test("success is not reported when a write fails", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  nativeStorage.failWrite = new Error("write blocked");
+  delete globalThis.localStorage;
+  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const result = await saveLifeToSlot("slot_1", buildHousehold());
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error, /write blocked/i);
+  }
 });

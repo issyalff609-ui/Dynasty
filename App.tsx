@@ -137,16 +137,19 @@ import {
 import {
   createManualLifeSaveOperationGuard,
   deleteLifeSave,
-  getEmptyManualLifeSaveSlots,
   getManualLifeSaves,
   HOUSEHOLD_SAVE_DEBOUNCE_MS,
   loadLifeFromSlot,
-  loadOrCreateHousehold,
   saveLifeToSlot,
-  saveHouseholdToStorage,
   type ManualLifeSaveSlot,
   type ManualSaveSlotId,
 } from "./src/systems/saveSystem";
+import {
+  autosaveHouseholdIfReady,
+  loadInitialAppState,
+  persistLoadedHouseholdIfNeeded,
+  type InitialAppLoadState,
+} from "./src/systems/appSaveLifecycle";
 import {
   askPartnerForSpace,
   bickerWithPartner,
@@ -290,29 +293,61 @@ const isDatingAppScreen = (screen: AppScreen) =>
   screen === "datingAppMatches";
 
 export default function App() {
-  const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
-  const initialManualLifeSavesRef = useRef<ReturnType<typeof getManualLifeSaves> | null>(null);
-  const datingPreferencesDraftCharacterIdRef = useRef<string | null>(null);
-  const processingDatingProfileIdRef = useRef<string | null>(null);
-  if (initialLoadRef.current === null) {
-    initialLoadRef.current = loadOrCreateHousehold(buildHousehold);
-  }
-  if (initialManualLifeSavesRef.current === null) {
-    initialManualLifeSavesRef.current = getManualLifeSaves();
+  const [initialAppState, setInitialAppState] = useState<InitialAppLoadState | null>(null);
+  const [hasFinishedInitialLoad, setHasFinishedInitialLoad] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void (async () => {
+      const loadedState = await loadInitialAppState(buildHousehold);
+      if (!isMounted) {
+        return;
+      }
+
+      setInitialAppState(loadedState);
+      setHasFinishedInitialLoad(true);
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  if (!hasFinishedInitialLoad || initialAppState === null) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.screenTitle}>Loading…</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
-  const [household, setHousehold] = useState<Household>(
-    initialLoadRef.current.household
+  return (
+    <LoadedApp
+      hasFinishedInitialLoad={hasFinishedInitialLoad}
+      initialAppState={initialAppState}
+    />
   );
-  const initialManualLifeSaves = initialManualLifeSavesRef.current;
+}
+
+function LoadedApp({
+  hasFinishedInitialLoad,
+  initialAppState,
+}: {
+  hasFinishedInitialLoad: boolean;
+  initialAppState: InitialAppLoadState;
+}) {
+  const datingPreferencesDraftCharacterIdRef = useRef<string | null>(null);
+  const processingDatingProfileIdRef = useRef<string | null>(null);
+  const [household, setHousehold] = useState<Household>(initialAppState.household);
   const latestHouseholdRef = useRef(household);
   const activeDatingProfileIdRef = useRef<string | null>(null);
   const saveSequenceRef = useRef(0);
-  const skipInitialAutosaveRef = useRef(!initialLoadRef.current.shouldResave);
+  const skipInitialAutosaveRef = useRef(true);
   const [manualLifeSlots, setManualLifeSlots] = useState<ManualLifeSaveSlot[]>(
-    initialManualLifeSaves.success
-      ? initialManualLifeSaves.slots
-      : getEmptyManualLifeSaveSlots()
+    initialAppState.manualLifeSlots
   );
   const [manualLifeOperation, setManualLifeOperation] = useState<{
     slotId: ManualSaveSlotId;
@@ -382,23 +417,35 @@ export default function App() {
   }, [household]);
 
   useEffect(() => {
-    if (!initialLoadRef.current?.notice && initialManualLifeSaves.success) {
+    if (initialAppState.notices.length === 0) {
       return;
     }
 
-    const messages = [
-      initialLoadRef.current?.notice,
-      initialManualLifeSaves.success ? null : initialManualLifeSaves.error,
-    ].filter((message): message is string => !!message);
-
-    if (messages.length === 0) {
-      return;
-    }
-
-    Alert.alert("Save Data", messages.join("\n\n"));
-  }, [initialManualLifeSaves]);
+    Alert.alert("Save Data", initialAppState.notices.join("\n\n"));
+  }, [initialAppState.notices]);
 
   useEffect(() => {
+    let isMounted = true;
+
+    void (async () => {
+      const result = await persistLoadedHouseholdIfNeeded(initialAppState.loadResult);
+      if (!isMounted || !result.attempted || result.success) {
+        return;
+      }
+
+      Alert.alert("Save Data", result.error);
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [initialAppState.loadResult]);
+
+  useEffect(() => {
+    if (!hasFinishedInitialLoad) {
+      return;
+    }
+
     if (skipInitialAutosaveRef.current) {
       skipInitialAutosaveRef.current = false;
       return;
@@ -410,13 +457,23 @@ export default function App() {
         return;
       }
 
-      saveHouseholdToStorage(latestHouseholdRef.current);
+      void (async () => {
+        const result = await autosaveHouseholdIfReady({
+          hasFinishedInitialLoad,
+          household: latestHouseholdRef.current,
+        });
+        if (!result.attempted || result.success) {
+          return;
+        }
+
+        Alert.alert("Save Data", result.error);
+      })();
     }, HOUSEHOLD_SAVE_DEBOUNCE_MS);
 
     return () => {
       globalThis.clearTimeout(timeoutId);
     };
-  }, [household]);
+  }, [hasFinishedInitialLoad, household]);
 
   const currentCharacter = useMemo(
     () => getCurrentHouseholdCharacter(household),
@@ -585,10 +642,10 @@ export default function App() {
     activeDatingProfileIdRef.current = profileId;
     setActiveDatingProfileId(profileId);
   };
-  const refreshManualLifeSlots = () => {
-    const result = getManualLifeSaves();
+  const refreshManualLifeSlots = async () => {
+    const result = await getManualLifeSaves();
     if (!result.success) {
-      Alert.alert("Save Life", result.error);
+      Alert.alert("Save Life", `Your saved lives could not be read.\n\n${result.error}`);
       return;
     }
 
@@ -1235,10 +1292,10 @@ export default function App() {
     setCurrentScreen("home");
   };
 
-  const runManualLifeOperation = (
+  const runManualLifeOperation = async (
     slotId: ManualSaveSlotId,
     action: "save" | "load" | "delete",
-    operation: () => void
+    operation: () => Promise<void>
   ) => {
     if (!manualLifeOperationGuardRef.current.start(slotId, action)) {
       return;
@@ -1246,7 +1303,7 @@ export default function App() {
 
     setManualLifeOperation({ slotId, action });
     try {
-      operation();
+      await operation();
     } finally {
       manualLifeOperationGuardRef.current.finish(slotId, action);
       setManualLifeOperation((current) =>
@@ -1256,14 +1313,14 @@ export default function App() {
   };
 
   const saveCurrentLifeToSlot = (slotId: ManualSaveSlotId) => {
-    runManualLifeOperation(slotId, "save", () => {
-      const result = saveLifeToSlot(slotId, latestHouseholdRef.current);
+    void runManualLifeOperation(slotId, "save", async () => {
+      const result = await saveLifeToSlot(slotId, latestHouseholdRef.current);
       if (!result.success) {
-        Alert.alert("Save Life", result.error);
+        Alert.alert("Save Life", `Your life could not be saved.\n\n${result.error}`);
         return;
       }
 
-      refreshManualLifeSlots();
+      await refreshManualLifeSlots();
       Alert.alert("Save Life", `Life saved to ${result.slot.slotLabel}.`);
     });
   };
@@ -1306,10 +1363,10 @@ export default function App() {
         {
           text: "Continue",
           onPress: () =>
-            runManualLifeOperation(slotId, "load", () => {
-              const result = loadLifeFromSlot(slotId);
+            void runManualLifeOperation(slotId, "load", async () => {
+              const result = await loadLifeFromSlot(slotId);
               if (!result.success) {
-                Alert.alert("Save Life", result.error);
+                Alert.alert("Save Life", `Your saved life could not be loaded.\n\n${result.error}`);
                 return;
               }
 
@@ -1318,7 +1375,7 @@ export default function App() {
               closeAllPanels();
               setSelectedExRelationshipId(null);
               setCurrentScreen("home");
-              refreshManualLifeSlots();
+              await refreshManualLifeSlots();
               Alert.alert("Save Life", `Loaded ${result.slot.slotLabel}.`);
             }),
         },
@@ -1341,14 +1398,17 @@ export default function App() {
           text: "Delete",
           style: "destructive",
           onPress: () =>
-            runManualLifeOperation(slotId, "delete", () => {
-              const result = deleteLifeSave(slotId);
+            void runManualLifeOperation(slotId, "delete", async () => {
+              const result = await deleteLifeSave(slotId);
               if (!result.success) {
-                Alert.alert("Save Life", result.error);
+                Alert.alert(
+                  "Save Life",
+                  `The saved life could not be deleted.\n\n${result.error}`
+                );
                 return;
               }
 
-              refreshManualLifeSlots();
+              await refreshManualLifeSlots();
               Alert.alert(
                 "Save Life",
                 `${slot.slotLabel} was deleted.`
@@ -3504,7 +3564,7 @@ export default function App() {
 
         <Pressable
           onPress={() => {
-            refreshManualLifeSlots();
+            void refreshManualLifeSlots();
             setCurrentScreen("saveLife");
           }}
           style={styles.box}
@@ -4059,6 +4119,11 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
     alignItems: "flex-start",
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   box: {
     borderWidth: 1,
