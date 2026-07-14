@@ -5,6 +5,7 @@ import type {
   DatingProfile,
   Friend,
   Memory,
+  ProposalRecord,
   RomanticRelationship,
 } from "./relationships";
 
@@ -238,6 +239,7 @@ export type Person = {
   friends: Friend[];
   relationshipScores: Record<string, number>;
   memories: Memory[];
+  proposalHistory: ProposalRecord[];
   diary: DiaryEntry[];
   relationshipPreferences: RelationshipPreferences;
   recentRelationshipLifeEvents: RecentRelationshipLifeEvent[];

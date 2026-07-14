@@ -418,6 +418,7 @@ export const promoteNpcToPerson = (
     friends: [],
     relationshipScores: {},
     memories: [],
+    proposalHistory: [],
     diary: [],
     relationshipPreferences: getDefaultRelationshipPreferences({
       id: personId,

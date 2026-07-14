@@ -29,8 +29,6 @@ import type {
   PartnerDateResult,
   PartnerDateResultTier,
   PartnerInteractionResult,
-  PartnerProposalOutcome,
-  PartnerProposalResult,
   RelationshipBoundaries,
   RelationshipBoundaryComfort,
   RelationshipBoundaryStyle,
@@ -1346,81 +1344,6 @@ export const goOnDateWithMatch = (
     person: nextPerson,
     match: nextMatch,
     result: resolvedDate.result,
-  };
-};
-
-const getProposalOutcome = (person: Character): PartnerProposalOutcome => {
-  const friendship = person.partner?.friendshipScore ?? 0;
-  const romance = person.partner?.romanceScore ?? 0;
-  const chemistry = person.partner?.chemistry ?? 50;
-  const attraction = person.partner?.attractiveness ?? 0;
-  const proposalScore = (friendship + romance + chemistry + attraction) / 4;
-
-  if (proposalScore < 40) {
-    return "rejected";
-  }
-
-  if (proposalScore <= 59) {
-    return "uncertain";
-  }
-
-  if (proposalScore <= 74) {
-    return "likely_accepted";
-  }
-
-  return "strongly_accepted";
-};
-
-export const proposeToPartner = (
-  person: Character,
-  otherPerson: Character,
-  currentYear: number
-):
-  | {
-      person: Character;
-      otherPerson: Character;
-      result: PartnerProposalResult;
-    }
-  | null => {
-  const activeRelationship =
-    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
-    getActiveRomanticRelationshipBetween(otherPerson, person.id);
-
-  if (
-    !activeRelationship ||
-    activeRelationship.currentStatus !== "Dating" ||
-    !person.partner ||
-    person.partner.personId !== otherPerson.id
-  ) {
-    return null;
-  }
-
-  const outcome = getProposalOutcome(person);
-
-  if (outcome === "likely_accepted" || outcome === "strongly_accepted") {
-    const [engagedPerson, engagedOtherPerson] = becomeEngaged(
-      person,
-      otherPerson,
-      currentYear
-    );
-
-    return {
-      person: engagedPerson,
-      otherPerson: engagedOtherPerson,
-      result: {
-        outcome,
-        statusChanged: true,
-      },
-    };
-  }
-
-  return {
-    person,
-    otherPerson,
-    result: {
-      outcome,
-      statusChanged: false,
-    },
   };
 };
 

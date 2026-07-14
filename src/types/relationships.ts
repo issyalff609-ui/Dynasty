@@ -51,13 +51,20 @@ export type RomanticRelationship = {
 export type Memory = {
   id: string;
   text: string;
-  type?: "relationship_boundary";
+  type?: "relationship_boundary" | "proposal";
   boundaryType?: "ex_boundary" | "relationship_style";
   partnerId?: string;
   relationshipId?: string;
   playerView?: RelationshipBoundaryComfort | RelationshipBoundaryStyle;
   partnerView?: RelationshipBoundaryComfort | RelationshipBoundaryStyle;
   year?: number;
+  proposerId?: string;
+  ring?: ProposalRing;
+  location?: ProposalLocation;
+  romanticSpeech?: number;
+  funnySpeech?: number;
+  simpleSpeech?: number;
+  outcome?: ProposalOutcome;
 };
 
 export type Classmate = {
@@ -183,15 +190,50 @@ export type PartnerConversationResult = {
   memoryCreated: boolean;
 };
 
-export type PartnerProposalOutcome =
-  | "rejected"
-  | "uncertain"
-  | "likely_accepted"
-  | "strongly_accepted";
+export type ProposalRing =
+  | "no_ring"
+  | "cheap_ring"
+  | "standard_ring"
+  | "luxury_ring"
+  | "family_heirloom";
+
+export type ProposalLocation =
+  | "at_home"
+  | "restaurant"
+  | "beach"
+  | "at_someone_elses_wedding"
+  | "family_gathering"
+  | "mountain"
+  | "lake"
+  | "park"
+  | "alley"
+  | "football_game";
+
+export type ProposalOutcome = "yes" | "not_yet" | "no" | "dumped";
+
+export type ProposalPlan = {
+  ring: ProposalRing;
+  location: ProposalLocation;
+  romanticSpeech: number;
+  funnySpeech: number;
+  simpleSpeech: number;
+};
+
+export type ProposalRecord = ProposalPlan & {
+  proposerId: string;
+  partnerId: string;
+  relationshipId: string;
+  year: number;
+  outcome: ProposalOutcome;
+  baseProposalScore?: number;
+  proposalPreferenceModifier?: number;
+  randomModifier?: number;
+  finalProposalScore?: number;
+};
 
 export type PartnerProposalResult = {
-  outcome: PartnerProposalOutcome;
-  statusChanged: boolean;
+  outcome: ProposalOutcome;
+  proposal: ProposalRecord;
 };
 
 export type PartnerConflictTier = "bad" | "tense" | "mixed" | "constructive";

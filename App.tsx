@@ -17,6 +17,13 @@ import {
   PARTNER_DATE_ACTIVITIES,
   type DatingAgeFilter,
 } from "./src/data/dating";
+import {
+  PROPOSAL_LOCATION_OPTIONS,
+  PROPOSAL_RING_OPTIONS,
+  getProposalLocationLabel,
+  getProposalRingCost,
+  getProposalRingLabel,
+} from "./src/data/proposals";
 import { CareerPanel } from "./src/screens/CareerPanel";
 import { DatingDiscoverScreen } from "./src/screens/dating/DatingDiscoverScreen";
 import { DatingMatchDetailsScreen } from "./src/screens/dating/DatingMatchDetailsScreen";
@@ -76,6 +83,7 @@ import {
   getDatingScoreBreakdown,
   getIndividualMatchChance,
   getIndividualMatchChanceBreakdown,
+  getCompatibilityScore,
   getRoseMatchChance,
 } from "./src/systems/dating";
 import {
@@ -138,9 +146,15 @@ import {
   goOnDate,
   goOnDateWithMatch,
   getRelationshipLabel,
-  proposeToPartner,
   spendTimeTogether,
 } from "./src/systems/relationships";
+import {
+  createProposalSubmissionGuard,
+  getDefaultProposalPlan,
+  getProposalOutcomeMessage,
+  resolveProposalToPartner,
+  updateProposalPlanSpeech,
+} from "./src/systems/proposals";
 import type {
   Character,
   EngineeringCategory,
@@ -163,6 +177,7 @@ import type {
   DatingProfile,
   PartnerBoundaryConversationTopic,
   PartnerDateCategory,
+  ProposalPlan,
 } from "./src/types/relationships";
 import { clamp } from "./src/utils/maths";
 import { convertLocalToGBP, formatMoney } from "./src/utils/money";
@@ -238,6 +253,7 @@ const formatDatingAgeLabel = (age: number) =>
 type AppScreen =
   | "home"
   | "romance"
+  | "proposalPlanning"
   | "datingApp"
   | "datingAppPreferences"
   | "datingAppDiscover"
@@ -309,6 +325,9 @@ export default function App() {
   const [conversationVisible, setConversationVisible] = useState(false);
   const [boundaryConversationVisible, setBoundaryConversationVisible] = useState(false);
   const [majorDecisionsVisible, setMajorDecisionsVisible] = useState(false);
+  const [proposalPlan, setProposalPlan] = useState<ProposalPlan>(getDefaultProposalPlan);
+  const [proposalConfirmationVisible, setProposalConfirmationVisible] = useState(false);
+  const [proposalSubmitting, setProposalSubmitting] = useState(false);
   const [conflictVisible, setConflictVisible] = useState(false);
   const [diaryVisible, setDiaryVisible] = useState(false);
   const [memoriesVisible, setMemoriesVisible] = useState(false);
@@ -318,6 +337,7 @@ export default function App() {
   const [engineeringVisible, setEngineeringVisible] = useState(false);
   const [engineeringCategory, setEngineeringCategory] =
     useState<EngineeringCategory>("Jobs");
+  const proposalSubmissionGuardRef = useRef(createProposalSubmissionGuard());
 
   useEffect(() => {
     latestHouseholdRef.current = household;
@@ -705,6 +725,20 @@ export default function App() {
   const isDatingPartner = activePartnerRelationship?.currentStatus === "Dating";
   const isEngagedWithPartner = activePartnerRelationship?.currentStatus === "Engaged";
   const isMarriedToPartner = activePartnerRelationship?.currentStatus === "Married";
+  const canOpenProposalPlanning =
+    !!currentCharacter.partner &&
+    !!partnerCharacter &&
+    isDatingPartner &&
+    !isEngagedWithPartner &&
+    !isMarriedToPartner;
+  const selectedProposalRingCost = getProposalRingCost(proposalPlan.ring);
+  const currentProposalCompatibility = currentCharacter.partner
+    ? getCompatibilityScore(currentCharacter, {
+        traits: currentCharacter.partner.traits,
+        job: currentCharacter.partner.job,
+        degree: currentCharacter.partner.degree,
+      })
+    : 0;
   const currentDiaryEntries = useMemo(
     () => [...currentCharacter.diary].reverse(),
     [currentCharacter.diary]
@@ -1083,6 +1117,30 @@ export default function App() {
     setSelectedDatingMatchId(null);
   };
 
+  const renderProposalSlider = (
+    label: string,
+    value: number,
+    onChange: (nextValue: number) => void
+  ) => (
+    <View style={styles.detailGroup}>
+      <Text>{`${label}: ${value}`}</Text>
+      <View style={styles.sliderRow}>
+        {[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((step) => (
+          <Pressable
+            key={`${label}-${step}`}
+            onPress={() => onChange(step)}
+            style={[
+              styles.sliderStep,
+              step <= value ? styles.sliderStepActive : null,
+            ]}
+          >
+            <Text style={styles.sliderStepLabel}>{step}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+
   if (engineeringVisible) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -1445,6 +1503,161 @@ export default function App() {
             style={styles.box}
           >
             <Text>Night Out</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "proposalPlanning") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable
+              onPress={goToRomancePartnerPage}
+              style={styles.headerBackButton}
+            >
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Proposal</Text>
+          </View>
+
+          <SectionCard>
+            <View style={styles.detailGroup}>
+              <Text>{`Partner: ${
+                currentCharacter.partner
+                  ? `${currentCharacter.partner.firstName} ${currentCharacter.partner.lastName}`
+                  : "Unavailable"
+              }`}</Text>
+              <Text>{`Bank Account: ${formatMoney(
+                currentCharacter.bankBalanceGBP,
+                household.country
+              )}`}</Text>
+              <Text>{`Compatibility: ${currentProposalCompatibility}/100`}</Text>
+            </View>
+          </SectionCard>
+
+          {!proposalConfirmationVisible ? (
+            <>
+              <SectionCard>
+                <View style={styles.detailGroup}>
+                  <Text style={styles.sectionTitle}>Ring</Text>
+                  {PROPOSAL_RING_OPTIONS.map((option) => {
+                    const affordable =
+                      option.costGBP === 0 ||
+                      option.costGBP <= currentCharacter.bankBalanceGBP;
+                    const selected = proposalPlan.ring === option.value;
+
+                    return (
+                      <Pressable
+                        key={option.value}
+                        onPress={affordable ? () =>
+                          setProposalPlan((current) => ({
+                            ...current,
+                            ring: option.value,
+                          }))
+                        : undefined}
+                        style={[
+                          styles.innerBox,
+                          selected ? styles.selectedOptionBox : null,
+                          !affordable ? styles.disabledOptionBox : null,
+                        ]}
+                      >
+                        <Text>{`${option.label} ${
+                          option.costGBP > 0
+                            ? `(${formatMoney(option.costGBP, household.country)})`
+                            : "(Free)"
+                        }`}</Text>
+                        {!affordable ? <Text>Cannot afford</Text> : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </SectionCard>
+
+              <SectionCard>
+                <View style={styles.detailGroup}>
+                  <Text style={styles.sectionTitle}>Location</Text>
+                  {PROPOSAL_LOCATION_OPTIONS.map((option) => (
+                    <Pressable
+                      key={option.value}
+                      onPress={() =>
+                        setProposalPlan((current) => ({
+                          ...current,
+                          location: option.value,
+                        }))
+                      }
+                      style={[
+                        styles.innerBox,
+                        proposalPlan.location === option.value
+                          ? styles.selectedOptionBox
+                          : null,
+                      ]}
+                    >
+                      <Text>{option.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </SectionCard>
+
+              <SectionCard>
+                <View style={styles.detailGroup}>
+                  <Text style={styles.sectionTitle}>Speech</Text>
+                  {renderProposalSlider("Romantic", proposalPlan.romanticSpeech, (value) =>
+                    updateProposalSpeech("romanticSpeech", value)
+                  )}
+                  {renderProposalSlider("Funny", proposalPlan.funnySpeech, (value) =>
+                    updateProposalSpeech("funnySpeech", value)
+                  )}
+                  {renderProposalSlider("Simple", proposalPlan.simpleSpeech, (value) =>
+                    updateProposalSpeech("simpleSpeech", value)
+                  )}
+                </View>
+              </SectionCard>
+
+              <Pressable
+                onPress={() => setProposalConfirmationVisible(true)}
+                style={styles.box}
+              >
+                <Text>Review Proposal</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <SectionCard>
+                <View style={styles.detailGroup}>
+                  <Text style={styles.sectionTitle}>Confirm Proposal</Text>
+                  <Text>{`Ring: ${getProposalRingLabel(proposalPlan.ring)}`}</Text>
+                  <Text>{`Location: ${getProposalLocationLabel(proposalPlan.location)}`}</Text>
+                  <Text>{`Romantic: ${proposalPlan.romanticSpeech}`}</Text>
+                  <Text>{`Funny: ${proposalPlan.funnySpeech}`}</Text>
+                  <Text>{`Simple: ${proposalPlan.simpleSpeech}`}</Text>
+                  <Text>{`Ring Cost: ${
+                    selectedProposalRingCost > 0
+                      ? formatMoney(selectedProposalRingCost, household.country)
+                      : "Free"
+                  }`}</Text>
+                </View>
+              </SectionCard>
+
+              <Pressable
+                onPress={() => setProposalConfirmationVisible(false)}
+                style={styles.box}
+              >
+                <Text>Edit Proposal</Text>
+              </Pressable>
+              <Pressable
+                onPress={proposalSubmitting ? undefined : confirmProposalPlan}
+                style={styles.box}
+              >
+                <Text>{proposalSubmitting ? "Submitting..." : "Confirm Proposal"}</Text>
+              </Pressable>
+            </>
+          )}
+
+          <Pressable onPress={goToRomancePartnerPage} style={styles.box}>
+            <Text>Cancel</Text>
           </Pressable>
         </ScrollView>
       </SafeAreaView>
@@ -2261,36 +2474,63 @@ export default function App() {
     Alert.alert(title, "TBC");
   };
 
-  const proposeToCurrentPartner = () => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
+  function updateProposalSpeech(
+    key: keyof Pick<ProposalPlan, "romanticSpeech" | "funnySpeech" | "simpleSpeech">,
+    value: number
+  ) {
+    setProposalPlan((current) => updateProposalPlanSpeech(current, key, value));
+  }
+
+  function openProposalPlanning() {
+    if (!canOpenProposalPlanning) {
+      Alert.alert("Romance", "You cannot propose right now.");
+      return;
+    }
+
+    proposalSubmissionGuardRef.current.end();
+    setProposalSubmitting(false);
+    setProposalConfirmationVisible(false);
+    setProposalPlan(getDefaultProposalPlan());
+    setMajorDecisionsVisible(false);
+    setCurrentScreen("proposalPlanning");
+  }
+
+  function confirmProposalPlan() {
+    if (!proposalSubmissionGuardRef.current.tryBegin()) {
+      return;
+    }
+
+    setProposalSubmitting(true);
+
+    try {
+      const currentHousehold = latestHouseholdRef.current;
+      const proposalCharacter = getCurrentHouseholdCharacter(currentHousehold);
+      if (!proposalCharacter.partner?.personId) {
+        Alert.alert("Romance", "You do not currently have a partner.");
+        return;
+      }
+
+      const proposalPartner = currentHousehold.characters.find(
+        (character) => character.id === proposalCharacter.partner?.personId
       );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
+      if (!proposalPartner) {
+        Alert.alert("Romance", "Your partner could not be found.");
+        return;
       }
 
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
+      const result = resolveProposalToPartner({
+        person: proposalCharacter,
+        otherPerson: proposalPartner,
+        currentYear: currentHousehold.currentYear,
+        plan: proposalPlan,
+      });
+
+      if (!result.success) {
+        Alert.alert("Romance", result.message);
+        return;
       }
 
-      const result = proposeToPartner(
-        currentCharacter,
-        partnerCharacter,
-        currentHousehold.currentYear
-      );
-      if (!result) {
-        return currentHousehold;
-      }
-
-      if (!result.result.statusChanged) {
-        return currentHousehold;
-      }
-
-      return {
+      const nextHousehold = {
         ...currentHousehold,
         characters: currentHousehold.characters.map((character) =>
           character.id === result.person.id
@@ -2300,8 +2540,21 @@ export default function App() {
               : character
         ),
       };
-    });
-  };
+
+      latestHouseholdRef.current = nextHousehold;
+      setHousehold(nextHousehold);
+      setProposalConfirmationVisible(false);
+      closeAllPanels();
+      setCurrentScreen("home");
+      setRomanceTwoVisible(true);
+      setPartnerVisible(result.result.outcome !== "dumped");
+
+      Alert.alert("Romance", getProposalOutcomeMessage(result.result.outcome));
+    } finally {
+      proposalSubmissionGuardRef.current.end();
+      setProposalSubmitting(false);
+    }
+  }
 
   const askPartnerForSpaceAction = () => {
     setHousehold((currentHousehold) => {
@@ -2792,9 +3045,9 @@ export default function App() {
                         >
                           <Text>Move in Together - WIP</Text>
                         </Pressable>
-                        {isDatingPartner ? (
+                        {canOpenProposalPlanning ? (
                           <Pressable
-                            onPress={proposeToCurrentPartner}
+                            onPress={openProposalPlanning}
                             style={styles.innerBox}
                           >
                             <Text>Propose</Text>
@@ -3689,6 +3942,30 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignSelf: "stretch",
+  },
+  selectedOptionBox: {
+    borderWidth: 2,
+  },
+  disabledOptionBox: {
+    opacity: 0.5,
+  },
+  sliderRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  sliderStep: {
+    minWidth: 36,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
+    borderWidth: 1,
+    alignItems: "center",
+  },
+  sliderStepActive: {
+    borderWidth: 2,
+  },
+  sliderStepLabel: {
+    fontSize: 12,
   },
   ageSelectorsRow: {
     flexDirection: "row",

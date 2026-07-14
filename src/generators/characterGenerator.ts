@@ -164,6 +164,7 @@ export const createCharacter = (
     friends: [],
     relationshipScores: {},
     memories: [],
+    proposalHistory: [],
     diary: [],
     relationshipPreferences: getDefaultRelationshipPreferences({
       id,
