@@ -139,6 +139,7 @@ export const createCharacter = (
       maximumAge: Math.max(18, Math.min(90, age + 5)),
       gender: "Both",
     },
+    datingProfileCreated: false,
     datingCandidatePool: {
       year: currentYear,
       profiles: [],

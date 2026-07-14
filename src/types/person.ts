@@ -224,6 +224,7 @@ export type Person = {
   universityYearsRemaining: number;
   genderPreference: Preference;
   datingPreferences: DatingPreferences;
+  datingProfileCreated: boolean;
   datingCandidatePool: DatingCandidatePool;
   datingMatches: DatingProfile[];
   datingDiscoveryState: DatingDiscoveryState;

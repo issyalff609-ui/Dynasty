@@ -1,7 +1,10 @@
 import React from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import type { DatingProfile } from "../../types/relationships";
-import type { DatingScreenStyles } from "./shared";
+import {
+  DatingBottomNavigation,
+  type DatingScreenStyles,
+} from "./shared";
 
 type DatingMatchesScreenProps = {
   styles: DatingScreenStyles;
@@ -10,6 +13,10 @@ type DatingMatchesScreenProps = {
   onBack: () => void;
   onClose: () => void;
   onHome: () => void;
+  onDiscover: () => void;
+  onMatches: () => void;
+  onPreferences: () => void;
+  onProfile: () => void;
   onOpenMatch: (matchId: string) => void;
 };
 
@@ -20,6 +27,10 @@ export function DatingMatchesScreen({
   onBack,
   onClose,
   onHome,
+  onDiscover,
+  onMatches,
+  onPreferences,
+  onProfile,
   onOpenMatch,
 }: DatingMatchesScreenProps) {
   return (
@@ -79,6 +90,14 @@ export function DatingMatchesScreen({
         )}
 
         {activeDatingMatches.length >= 7 ? <Text>Match limit reached.</Text> : null}
+        <DatingBottomNavigation
+          styles={styles}
+          currentSection="matches"
+          onDiscover={onDiscover}
+          onMatches={onMatches}
+          onPreferences={onPreferences}
+          onProfile={onProfile}
+        />
       </ScrollView>
     </SafeAreaView>
   );

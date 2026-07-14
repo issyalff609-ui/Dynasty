@@ -7,6 +7,7 @@ const {
   createProposalSubmissionGuard,
   getDefaultProposalPlan,
   getProposalOutcomeFromScore,
+  getProposalCompatibilityScore,
   getProposalPreferenceModifier,
   resolveProposalToPartner,
   rollProposalRandomModifier,
@@ -188,6 +189,39 @@ test("friendship 80 romance 90 compatibility 60 produces 79.5", () => {
   );
 });
 
+test("proposal compatibility uses the partner-facing direction", () => {
+  const [person, otherPerson] = buildDatingPartners({
+    friendshipScore: 40,
+    romanceScore: 40,
+  });
+  person.partner.compatibility = 100;
+  otherPerson.partner.compatibility = 0;
+
+  assert.equal(
+    getProposalCompatibilityScore({
+      person,
+      otherPerson,
+    }),
+    0
+  );
+
+  const result = resolveProposalToPartner({
+    person,
+    otherPerson,
+    currentYear: CURRENT_YEAR,
+    plan: buildPlan(),
+    randomModifier: 0,
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.result.proposal.baseProposalScore, 30);
+  assert.equal(result.result.outcome, "dumped");
+});
+
 test("proposal preference modifier is capped at +10", () => {
   const modifier = getProposalPreferenceModifier({
     characteristics: [
@@ -230,6 +264,20 @@ test("proposal preference modifier is floored at -10", () => {
   });
 
   assert.ok(modifier >= -10);
+});
+
+test("aloof characteristics contribute zero proposal preference effect", () => {
+  const modifier = getProposalPreferenceModifier({
+    characteristics: [
+      { characteristic: "Goofiness", stance: "Aloof" },
+    ],
+    plan: buildPlan({
+      location: "football_game",
+      funnySpeech: 100,
+    }),
+  });
+
+  assert.equal(modifier, 0);
 });
 
 test("random modifier stays within -5 to +5", () => {
@@ -328,6 +376,40 @@ test("every outcome creates a detailed proposal record and proposal memory", () 
     assert.equal(memory.ring, "no_ring");
     assert.equal(memory.location, "at_home");
     assert.equal(memory.outcome, outcome);
+    assert.ok(!memory.text.includes("Outcome:"));
+    assert.ok(!memory.text.includes("not_yet"));
+  });
+});
+
+test("both characters receive proposal diary entries for each outcome", () => {
+  const expectedByOutcome = {
+    yes: {
+      proposer: "I proposed to Jamie at At Home with No Ring. They said yes.",
+      partner: "Alex proposed to me at At Home with No Ring. I said yes.",
+    },
+    not_yet: {
+      proposer: "I proposed to Jamie at At Home with No Ring. They said they were not ready yet.",
+      partner: "Alex proposed to me at At Home with No Ring. I said I was not ready yet.",
+    },
+    no: {
+      proposer: "I proposed to Jamie at At Home with No Ring. They said no.",
+      partner: "Alex proposed to me at At Home with No Ring. I said no.",
+    },
+    dumped: {
+      proposer: "I proposed to Jamie at At Home with No Ring. It ended the relationship.",
+      partner: "Alex proposed to me at At Home with No Ring. I ended the relationship after the proposal.",
+    },
+  };
+
+  ["yes", "not_yet", "no", "dumped"].forEach((outcome) => {
+    const result = resolveWithOutcome(outcome);
+    assert.equal(result.success, true);
+    if (!result.success) {
+      return;
+    }
+
+    assert.equal(result.person.diary[0]?.text, expectedByOutcome[outcome].proposer);
+    assert.equal(result.otherPerson.diary[0]?.text, expectedByOutcome[outcome].partner);
   });
 });
 

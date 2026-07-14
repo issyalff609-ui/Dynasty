@@ -6,6 +6,9 @@ import {
   syncLinkedSocialRecordsFromPeople,
   syncPersonAge,
 } from "./person";
+import { normalizeDatingProfileCreated } from "./datingProfile";
+import { getCurrentHouseholdCharacter } from "./household";
+import { getActiveRomanticRelationship } from "./relationships";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
 import type { Classmate, DatingProfile, Friend } from "../types/relationships";
@@ -15,6 +18,13 @@ export const HOUSEHOLD_STORAGE_KEY = "dynasties-household";
 export const HOUSEHOLD_BACKUP_STORAGE_KEY = "dynasties-household-backup";
 export const CURRENT_SAVE_VERSION = 1;
 export const HOUSEHOLD_SAVE_DEBOUNCE_MS = 250;
+export const MANUAL_SAVE_SLOT_KEYS = {
+  slot_1: "dynasties-manual-life-slot-1",
+  slot_2: "dynasties-manual-life-slot-2",
+} as const;
+export const MANUAL_SAVE_SLOT_IDS = ["slot_1", "slot_2"] as const;
+
+export type ManualSaveSlotId = (typeof MANUAL_SAVE_SLOT_IDS)[number];
 
 type GameSave = {
   saveVersion: number;
@@ -22,12 +32,93 @@ type GameSave = {
   household: Household;
 };
 
+export type ManualLifeSave = {
+  slotId: ManualSaveSlotId;
+  saveVersion: number;
+  savedAt: string;
+  household: Household;
+};
+
+export type ManualLifeSaveSummary = {
+  slotId: ManualSaveSlotId;
+  slotLabel: string;
+  savedAt: string;
+  activeCharacterName: string;
+  activeCharacterAge: number;
+  currentYear: number;
+  country: Country;
+  relationshipStatus: string | null;
+  occupation: string;
+  householdSize: number;
+};
+
+export type ManualLifeSaveSlot = {
+  slotId: ManualSaveSlotId;
+  slotLabel: string;
+  summary: ManualLifeSaveSummary | null;
+};
+
 export type LoadHouseholdResult = {
   household: Household;
   shouldResave: boolean;
   source: "primary" | "backup" | "new";
   usedLegacyFormat: boolean;
+  notice: string | null;
 };
+
+type StoredHouseholdParseResult =
+  | {
+      success: true;
+      household: Household;
+      savedAt: string | null;
+      shouldResave: boolean;
+      usedLegacyFormat: boolean;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type ManualLifeSaveSlotsResult =
+  | {
+      success: true;
+      slots: ManualLifeSaveSlot[];
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type ManualLifeSaveOperationResult =
+  | {
+      success: true;
+      slot: ManualLifeSaveSlot;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type LoadLifeFromSlotResult =
+  | {
+      success: true;
+      household: Household;
+      slot: ManualLifeSaveSlot;
+    }
+  | {
+      success: false;
+      error: string;
+    };
+
+type DeleteLifeSaveResult =
+  | {
+      success: true;
+      slotId: ManualSaveSlotId;
+    }
+  | {
+      success: false;
+      error: string;
+    };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -37,6 +128,12 @@ const isStringArray = (value: unknown): value is string[] =>
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const isManualSaveSlotId = (value: unknown): value is ManualSaveSlotId =>
+  value === "slot_1" || value === "slot_2";
+
+const getManualSaveSlotLabel = (slotId: ManualSaveSlotId) =>
+  slotId === "slot_1" ? "Save Slot 1" : "Save Slot 2";
 
 const hydrateClassmate = (classmate: Classmate): Classmate => {
   const personId = classmate.personId ?? null;
@@ -248,6 +345,13 @@ const hydrateCharacter = (
           gender: character.datingPreferences.gender,
         }
       : getDefaultDatingPreferences(character, currentYear);
+  const datingProfileCreated =
+    typeof character.datingProfileCreated === "boolean"
+      ? character.datingProfileCreated
+      : normalizeDatingProfileCreated({
+          ...character,
+          datingProfileCreated: false,
+        } as Character).datingProfileCreated;
   const datingRoseState =
     character.datingRoseState &&
     isFiniteNumber(character.datingRoseState.year) &&
@@ -267,6 +371,9 @@ const hydrateCharacter = (
     ? character.relationshipScores
     : {};
   const memories = Array.isArray(character.memories) ? character.memories : [];
+  const proposalHistory = Array.isArray(character.proposalHistory)
+    ? character.proposalHistory
+    : [];
   const diary = Array.isArray(character.diary) ? character.diary : [];
   const romanticRelationships = Array.isArray(character.romanticRelationships)
     ? character.romanticRelationships.map((relationship) => ({
@@ -333,6 +440,7 @@ const hydrateCharacter = (
       ...character,
       birthYear,
       genderPreference: datingPreferences.gender,
+      datingProfileCreated,
       individualReputation,
       traitHistory,
       aspirations,
@@ -347,6 +455,7 @@ const hydrateCharacter = (
       datingRefreshesRemaining,
       relationshipScores,
       memories,
+      proposalHistory,
       diary,
       relationshipPreferences,
       recentRelationshipLifeEvents,
@@ -369,6 +478,7 @@ const hydrateCharacter = (
     character.birthYear === birthYear &&
     character.age === resolvedCharacter.age &&
     character.genderPreference === resolvedCharacter.genderPreference &&
+    character.datingProfileCreated === datingProfileCreated &&
     character.academicPerformanceProfile === academicPerformanceProfile &&
     character.academicPerformanceScore === academicPerformanceScore &&
     character.studySessionsUsedThisYear === studySessionsUsedThisYear &&
@@ -389,6 +499,7 @@ const hydrateCharacter = (
     character.datingRefreshesRemaining === datingRefreshesRemaining &&
     character.relationshipScores === relationshipScores &&
     character.memories === memories &&
+    character.proposalHistory === proposalHistory &&
     character.diary === diary &&
     character.relationshipPreferences === relationshipPreferences &&
     character.recentRelationshipLifeEvents === recentRelationshipLifeEvents &&
@@ -416,6 +527,7 @@ const hydrateCharacter = (
     skills,
     careerHistory,
     datingPreferences,
+    datingProfileCreated,
     fullTimeJobListings,
     partTimeJobListings,
     jobRefreshesRemaining,
@@ -423,6 +535,7 @@ const hydrateCharacter = (
     datingRefreshesRemaining,
     relationshipScores,
     memories,
+    proposalHistory,
     diary,
     relationshipPreferences,
     recentRelationshipLifeEvents,
@@ -538,17 +651,63 @@ export const hydrateHousehold = (household: Household): Household => {
 
 const isGameSave = (value: unknown): value is GameSave =>
   isRecord(value) &&
-  value.saveVersion === CURRENT_SAVE_VERSION &&
+  isFiniteNumber(value.saveVersion) &&
   typeof value.savedAt === "string" &&
   isHouseholdLike(value.household);
 
-const parseStoredHousehold = (rawSave: string) => {
+const isManualLifeSave = (value: unknown): value is ManualLifeSave =>
+  isRecord(value) &&
+  isManualSaveSlotId(value.slotId) &&
+  isFiniteNumber(value.saveVersion) &&
+  typeof value.savedAt === "string" &&
+  isHouseholdLike(value.household);
+
+const buildStoredSaveNotice = (
+  primaryError: string | null,
+  backupError: string | null
+) => {
+  const reasons = [primaryError, backupError].filter(
+    (reason): reason is string => reason !== null
+  );
+
+  if (reasons.length === 0) {
+    return null;
+  }
+
+  return reasons.join("\n");
+};
+
+const parseStoredHousehold = (
+  rawSave: string,
+  options?: {
+    expectedSlotId?: ManualSaveSlotId;
+  }
+): StoredHouseholdParseResult => {
   try {
     const parsed = JSON.parse(rawSave) as unknown;
 
+    if (isManualLifeSave(parsed)) {
+      if (options?.expectedSlotId && parsed.slotId !== options.expectedSlotId) {
+        return {
+          success: false,
+          error: "Saved life belongs to a different slot.",
+        };
+      }
+
+      return {
+        success: true,
+        household: parsed.household,
+        savedAt: parsed.savedAt,
+        shouldResave: parsed.saveVersion !== CURRENT_SAVE_VERSION,
+        usedLegacyFormat: false,
+      };
+    }
+
     if (isGameSave(parsed)) {
       return {
+        success: true,
         household: parsed.household,
+        savedAt: parsed.savedAt,
         shouldResave: false,
         usedLegacyFormat: false,
       };
@@ -556,58 +715,166 @@ const parseStoredHousehold = (rawSave: string) => {
 
     if (isHouseholdLike(parsed)) {
       return {
+        success: true,
         household: parsed,
+        savedAt: null,
         shouldResave: true,
         usedLegacyFormat: true,
       };
     }
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error && error.message
+          ? `Saved data could not be read: ${error.message}`
+          : "Saved data could not be read.",
+    };
   }
 
-  return null;
+  return {
+    success: false,
+    error: "Saved data is not in a recognised format.",
+  };
 };
 
 const canUseLocalStorage = () => typeof globalThis.localStorage !== "undefined";
 
+const getStorageItem = (key: string) => {
+  if (!canUseLocalStorage()) {
+    return {
+      success: false as const,
+      error: "Persistent storage is unavailable in this environment.",
+    };
+  }
+
+  try {
+    return {
+      success: true as const,
+      value: globalThis.localStorage.getItem(key),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error && error.message
+          ? `Persistent storage could not be read: ${error.message}`
+          : "Persistent storage could not be read.",
+    };
+  }
+};
+
+const setStorageItem = (key: string, value: string) => {
+  if (!canUseLocalStorage()) {
+    return {
+      success: false as const,
+      error: "Persistent storage is unavailable in this environment.",
+    };
+  }
+
+  try {
+    globalThis.localStorage.setItem(key, value);
+    return {
+      success: true as const,
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error && error.message
+          ? `Persistent storage could not be written: ${error.message}`
+          : "Persistent storage could not be written.",
+    };
+  }
+};
+
+const removeStorageItem = (key: string) => {
+  if (!canUseLocalStorage()) {
+    return {
+      success: false as const,
+      error: "Persistent storage is unavailable in this environment.",
+    };
+  }
+
+  try {
+    globalThis.localStorage.removeItem(key);
+    return {
+      success: true as const,
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error && error.message
+          ? `Persistent storage could not be updated: ${error.message}`
+          : "Persistent storage could not be updated.",
+    };
+  }
+};
+
 export const loadOrCreateHousehold = (
   createHousehold: () => Household
 ): LoadHouseholdResult => {
-  if (!canUseLocalStorage()) {
+  const primaryRead = getStorageItem(HOUSEHOLD_STORAGE_KEY);
+  if (!primaryRead.success) {
     return {
       household: hydrateHousehold(createHousehold()),
       shouldResave: false,
       source: "new",
       usedLegacyFormat: false,
+      notice: primaryRead.error,
     };
   }
 
-  const primaryRaw = globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
+  let primaryError: string | null = null;
+  let backupError: string | null = null;
+  const primaryRaw = primaryRead.value;
   if (primaryRaw) {
     const parsedPrimary = parseStoredHousehold(primaryRaw);
-    if (parsedPrimary) {
+    if (parsedPrimary.success) {
       const hydrated = hydrateHousehold(parsedPrimary.household);
       return {
         household: hydrated,
         shouldResave: parsedPrimary.shouldResave || hydrated !== parsedPrimary.household,
         source: "primary",
         usedLegacyFormat: parsedPrimary.usedLegacyFormat,
+        notice: null,
       };
     }
+
+    primaryError = `Autosave could not be loaded. ${parsedPrimary.error}`;
+    console.warn(primaryError);
   }
 
-  const backupRaw = globalThis.localStorage.getItem(HOUSEHOLD_BACKUP_STORAGE_KEY);
+  const backupRead = getStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY);
+  if (!backupRead.success) {
+    return {
+      household: hydrateHousehold(createHousehold()),
+      shouldResave: false,
+      source: "new",
+      usedLegacyFormat: false,
+      notice: buildStoredSaveNotice(primaryError, backupRead.error),
+    };
+  }
+
+  const backupRaw = backupRead.value;
   if (backupRaw) {
     const parsedBackup = parseStoredHousehold(backupRaw);
-    if (parsedBackup) {
+    if (parsedBackup.success) {
       const hydrated = hydrateHousehold(parsedBackup.household);
       return {
         household: hydrated,
         shouldResave: true,
         source: "backup",
         usedLegacyFormat: parsedBackup.usedLegacyFormat,
+        notice:
+          primaryError ??
+          "Primary autosave was unavailable. Recovered your most recent backup.",
       };
     }
+
+    backupError = `Autosave backup could not be loaded. ${parsedBackup.error}`;
+    console.warn(backupError);
   }
 
   return {
@@ -615,6 +882,7 @@ export const loadOrCreateHousehold = (
     shouldResave: false,
     source: "new",
     usedLegacyFormat: false,
+    notice: buildStoredSaveNotice(primaryError, backupError),
   };
 };
 
@@ -623,6 +891,50 @@ const buildGameSave = (household: Household): GameSave => ({
   savedAt: new Date().toISOString(),
   household,
 });
+
+const buildManualLifeSave = (
+  slotId: ManualSaveSlotId,
+  household: Household
+): ManualLifeSave => ({
+  slotId,
+  saveVersion: CURRENT_SAVE_VERSION,
+  savedAt: new Date().toISOString(),
+  household,
+});
+
+const buildManualLifeSaveSummary = (
+  slotId: ManualSaveSlotId,
+  household: Household,
+  savedAt: string
+): ManualLifeSaveSummary => {
+  const activeCharacter = getCurrentHouseholdCharacter(household);
+  const activeRelationship = getActiveRomanticRelationship(activeCharacter);
+
+  return {
+    slotId,
+    slotLabel: getManualSaveSlotLabel(slotId),
+    savedAt,
+    activeCharacterName: `${activeCharacter.firstName} ${activeCharacter.lastName}`,
+    activeCharacterAge: activeCharacter.age,
+    currentYear: household.currentYear,
+    country: household.country,
+    relationshipStatus: activeRelationship?.currentStatus ?? null,
+    occupation: activeCharacter.job,
+    householdSize: household.characters.length,
+  };
+};
+
+const buildManualLifeSaveSlot = (
+  slotId: ManualSaveSlotId,
+  summary: ManualLifeSaveSummary | null
+): ManualLifeSaveSlot => ({
+  slotId,
+  slotLabel: getManualSaveSlotLabel(slotId),
+  summary,
+});
+
+export const getEmptyManualLifeSaveSlots = () =>
+  MANUAL_SAVE_SLOT_IDS.map((slotId) => buildManualLifeSaveSlot(slotId, null));
 
 export const saveHouseholdToStorage = (household: Household) => {
   if (!canUseLocalStorage() || !isHouseholdLike(household)) {
@@ -637,14 +949,207 @@ export const saveHouseholdToStorage = (household: Household) => {
   }
 
   try {
-    const currentPrimary = globalThis.localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
-    if (currentPrimary && parseStoredHousehold(currentPrimary)) {
-      globalThis.localStorage.setItem(HOUSEHOLD_BACKUP_STORAGE_KEY, currentPrimary);
+    const currentPrimaryRead = getStorageItem(HOUSEHOLD_STORAGE_KEY);
+    if (!currentPrimaryRead.success) {
+      return false;
+    }
+    const currentPrimary = currentPrimaryRead.value;
+    if (currentPrimary) {
+      const parsedCurrentPrimary = parseStoredHousehold(currentPrimary);
+      if (parsedCurrentPrimary.success) {
+        const backupWrite = setStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY, currentPrimary);
+        if (!backupWrite.success) {
+          return false;
+        }
+      }
     }
 
-    globalThis.localStorage.setItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
+    const primaryWrite = setStorageItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
+    if (!primaryWrite.success) {
+      return false;
+    }
     return true;
   } catch {
     return false;
   }
+};
+
+export const getManualLifeSaves = (): ManualLifeSaveSlotsResult => {
+  const slots = getEmptyManualLifeSaveSlots();
+
+  for (const slotId of MANUAL_SAVE_SLOT_IDS) {
+    const readResult = getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+    if (!readResult.success) {
+      return {
+        success: false,
+        error: readResult.error,
+      };
+    }
+
+    if (!readResult.value) {
+      continue;
+    }
+
+    const parsed = parseStoredHousehold(readResult.value, {
+      expectedSlotId: slotId,
+    });
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: `${getManualSaveSlotLabel(slotId)} could not be read. ${parsed.error}`,
+      };
+    }
+
+    const hydrated = hydrateHousehold(parsed.household);
+    const summary = buildManualLifeSaveSummary(
+      slotId,
+      hydrated,
+      parsed.savedAt ?? new Date(0).toISOString()
+    );
+    slots[MANUAL_SAVE_SLOT_IDS.indexOf(slotId)] = buildManualLifeSaveSlot(
+      slotId,
+      summary
+    );
+  }
+
+  return {
+    success: true,
+    slots,
+  };
+};
+
+export const saveLifeToSlot = (
+  slotId: ManualSaveSlotId,
+  household: Household
+): ManualLifeSaveOperationResult => {
+  if (!isManualSaveSlotId(slotId)) {
+    return {
+      success: false,
+      error: "Invalid save slot.",
+    };
+  }
+
+  if (!isHouseholdLike(household)) {
+    return {
+      success: false,
+      error: "The current life could not be saved.",
+    };
+  }
+
+  let serializedSave: string;
+  const manualLifeSave = buildManualLifeSave(slotId, household);
+  try {
+    serializedSave = JSON.stringify(manualLifeSave);
+  } catch {
+    return {
+      success: false,
+      error: "The current life could not be saved.",
+    };
+  }
+
+  const writeResult = setStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId], serializedSave);
+  if (!writeResult.success) {
+    return {
+      success: false,
+      error: writeResult.error,
+    };
+  }
+
+  return {
+    success: true,
+    slot: buildManualLifeSaveSlot(
+      slotId,
+      buildManualLifeSaveSummary(slotId, household, manualLifeSave.savedAt)
+    ),
+  };
+};
+
+export const loadLifeFromSlot = (slotId: ManualSaveSlotId): LoadLifeFromSlotResult => {
+  if (!isManualSaveSlotId(slotId)) {
+    return {
+      success: false,
+      error: "Invalid save slot.",
+    };
+  }
+
+  const readResult = getStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+  if (!readResult.success) {
+    return {
+      success: false,
+      error: readResult.error,
+    };
+  }
+
+  if (!readResult.value) {
+    return {
+      success: false,
+      error: `${getManualSaveSlotLabel(slotId)} is empty.`,
+    };
+  }
+
+  const parsed = parseStoredHousehold(readResult.value, {
+    expectedSlotId: slotId,
+  });
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: `${getManualSaveSlotLabel(slotId)} could not be loaded. ${parsed.error}`,
+    };
+  }
+
+  const hydrated = hydrateHousehold(parsed.household);
+
+  return {
+    success: true,
+    household: hydrated,
+    slot: buildManualLifeSaveSlot(
+      slotId,
+      buildManualLifeSaveSummary(slotId, hydrated, parsed.savedAt ?? new Date(0).toISOString())
+    ),
+  };
+};
+
+export const deleteLifeSave = (slotId: ManualSaveSlotId): DeleteLifeSaveResult => {
+  if (!isManualSaveSlotId(slotId)) {
+    return {
+      success: false,
+      error: "Invalid save slot.",
+    };
+  }
+
+  const deleteResult = removeStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+  if (!deleteResult.success) {
+    return {
+      success: false,
+      error: deleteResult.error,
+    };
+  }
+
+  return {
+    success: true,
+    slotId,
+  };
+};
+
+export const createManualLifeSaveOperationGuard = () => {
+  let inFlight: `${ManualSaveSlotId}:${"save" | "load" | "delete"}` | null = null;
+
+  return {
+    start(slotId: ManualSaveSlotId, action: "save" | "load" | "delete") {
+      const nextOperation = `${slotId}:${action}` as const;
+
+      if (inFlight === nextOperation) {
+        return false;
+      }
+
+      inFlight = nextOperation;
+      return true;
+    },
+    finish(slotId: ManualSaveSlotId, action: "save" | "load" | "delete") {
+      const completedOperation = `${slotId}:${action}` as const;
+      if (inFlight === completedOperation) {
+        inFlight = null;
+      }
+    },
+  };
 };

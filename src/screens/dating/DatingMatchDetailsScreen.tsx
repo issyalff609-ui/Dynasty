@@ -1,6 +1,10 @@
 import React from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
-import type { DatingDateCategoryRanges, DatingScreenStyles } from "./shared";
+import {
+  DatingBottomNavigation,
+  type DatingDateCategoryRanges,
+  type DatingScreenStyles,
+} from "./shared";
 
 type DatingMatchDetailsScreenProps = {
   styles: DatingScreenStyles;
@@ -23,6 +27,10 @@ type DatingMatchDetailsScreenProps = {
   dateCategoryRanges: DatingDateCategoryRanges;
   onBack: () => void;
   onHome: () => void;
+  onDiscover: () => void;
+  onMatches: () => void;
+  onPreferences: () => void;
+  onProfile: () => void;
   onToggleEngineerView: () => void;
   onText: () => void;
   onToggleGoOnDate: () => void;
@@ -43,6 +51,10 @@ export function DatingMatchDetailsScreen({
   dateCategoryRanges,
   onBack,
   onHome,
+  onDiscover,
+  onMatches,
+  onPreferences,
+  onProfile,
   onToggleEngineerView,
   onText,
   onToggleGoOnDate,
@@ -141,6 +153,14 @@ export function DatingMatchDetailsScreen({
         ) : (
           <Text>No match selected.</Text>
         )}
+        <DatingBottomNavigation
+          styles={styles}
+          currentSection="matches"
+          onDiscover={onDiscover}
+          onMatches={onMatches}
+          onPreferences={onPreferences}
+          onProfile={onProfile}
+        />
       </ScrollView>
     </SafeAreaView>
   );

@@ -83,7 +83,6 @@ import {
   getDatingScoreBreakdown,
   getIndividualMatchChance,
   getIndividualMatchChanceBreakdown,
-  getCompatibilityScore,
   getRoseMatchChance,
 } from "./src/systems/dating";
 import {
@@ -110,6 +109,13 @@ import {
   prepareDatingDiscoverCharacter,
 } from "./src/systems/datingDiscovery";
 import {
+  completeDatingProfileSetup,
+  getDatingAppLaunchSection,
+  hasDatingProfileCreated,
+  updateDatingAppPreferences,
+  updateDatingProfile,
+} from "./src/systems/datingProfile";
+import {
   calculateProgressiveTax,
   getTaxBrackets,
   getTaxSummary,
@@ -129,9 +135,17 @@ import {
   promoteNpcToPerson,
 } from "./src/systems/person";
 import {
+  createManualLifeSaveOperationGuard,
+  deleteLifeSave,
+  getEmptyManualLifeSaveSlots,
+  getManualLifeSaves,
   HOUSEHOLD_SAVE_DEBOUNCE_MS,
+  loadLifeFromSlot,
   loadOrCreateHousehold,
+  saveLifeToSlot,
   saveHouseholdToStorage,
+  type ManualLifeSaveSlot,
+  type ManualSaveSlotId,
 } from "./src/systems/saveSystem";
 import {
   askPartnerForSpace,
@@ -139,6 +153,7 @@ import {
   breakUpOrDivorcePartner,
   buildFriendFromClassmate,
   getActiveRomanticRelationship,
+  getExRelationshipSummaries,
   getAvailablePartnerConflictIssues,
   getAvailablePartnerConversationTopics,
   getActiveRomanticRelationshipBetween,
@@ -151,10 +166,14 @@ import {
 import {
   createProposalSubmissionGuard,
   getDefaultProposalPlan,
+  getProposalCompatibilityScore,
   getProposalOutcomeMessage,
   resolveProposalToPartner,
   updateProposalPlanSpeech,
 } from "./src/systems/proposals";
+import {
+  getRomancePageSections,
+} from "./src/systems/romancePage";
 import type {
   Character,
   EngineeringCategory,
@@ -252,7 +271,10 @@ const formatDatingAgeLabel = (age: number) =>
 
 type AppScreen =
   | "home"
+  | "saveLife"
   | "romance"
+  | "romanceExes"
+  | "romanceExDetails"
   | "proposalPlanning"
   | "datingApp"
   | "datingAppPreferences"
@@ -269,19 +291,33 @@ const isDatingAppScreen = (screen: AppScreen) =>
 
 export default function App() {
   const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
+  const initialManualLifeSavesRef = useRef<ReturnType<typeof getManualLifeSaves> | null>(null);
   const datingPreferencesDraftCharacterIdRef = useRef<string | null>(null);
   const processingDatingProfileIdRef = useRef<string | null>(null);
   if (initialLoadRef.current === null) {
     initialLoadRef.current = loadOrCreateHousehold(buildHousehold);
   }
+  if (initialManualLifeSavesRef.current === null) {
+    initialManualLifeSavesRef.current = getManualLifeSaves();
+  }
 
   const [household, setHousehold] = useState<Household>(
     initialLoadRef.current.household
   );
+  const initialManualLifeSaves = initialManualLifeSavesRef.current;
   const latestHouseholdRef = useRef(household);
   const activeDatingProfileIdRef = useRef<string | null>(null);
   const saveSequenceRef = useRef(0);
   const skipInitialAutosaveRef = useRef(!initialLoadRef.current.shouldResave);
+  const [manualLifeSlots, setManualLifeSlots] = useState<ManualLifeSaveSlot[]>(
+    initialManualLifeSaves.success
+      ? initialManualLifeSaves.slots
+      : getEmptyManualLifeSaveSlots()
+  );
+  const [manualLifeOperation, setManualLifeOperation] = useState<{
+    slotId: ManualSaveSlotId;
+    action: "save" | "load" | "delete";
+  } | null>(null);
   const [playerDetailsVisible, setPlayerDetailsVisible] = useState(false);
   const [familyVisible, setFamilyVisible] = useState(false);
   const [familyStatsVisible, setFamilyStatsVisible] = useState(false);
@@ -293,11 +329,11 @@ export default function App() {
   const [financesVisible, setFinancesVisible] = useState(false);
   const [jobsVisible, setJobsVisible] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<AppScreen>("home");
-  const [romanceTwoVisible, setRomanceTwoVisible] = useState(false);
   const [friendsVisible, setFriendsVisible] = useState(false);
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
   const [datingAppVisible, setDatingAppVisible] = useState(false);
   const [partnerVisible, setPartnerVisible] = useState(false);
+  const [selectedExRelationshipId, setSelectedExRelationshipId] = useState<string | null>(null);
   const [selectedDatingMatchId, setSelectedDatingMatchId] = useState<string | null>(null);
   const [activeDatingProfileId, setActiveDatingProfileId] = useState<string | null>(null);
   const [datingActionInProgress, setDatingActionInProgress] = useState(false);
@@ -306,7 +342,6 @@ export default function App() {
   const [datingScoreInfoVisible, setDatingScoreInfoVisible] = useState(false);
   const [datingMatchesVisible, setDatingMatchesVisible] = useState(false);
   const [matchChanceBreakdownVisible, setMatchChanceBreakdownVisible] = useState(false);
-  const [datingAppSettingsVisible, setDatingAppSettingsVisible] = useState(false);
   const [discoverEngineerViewVisible, setDiscoverEngineerViewVisible] = useState(false);
   const [matchDetailsEngineerViewVisible, setMatchDetailsEngineerViewVisible] =
     useState(false);
@@ -338,10 +373,30 @@ export default function App() {
   const [engineeringCategory, setEngineeringCategory] =
     useState<EngineeringCategory>("Jobs");
   const proposalSubmissionGuardRef = useRef(createProposalSubmissionGuard());
+  const manualLifeOperationGuardRef = useRef(
+    createManualLifeSaveOperationGuard()
+  );
 
   useEffect(() => {
     latestHouseholdRef.current = household;
   }, [household]);
+
+  useEffect(() => {
+    if (!initialLoadRef.current?.notice && initialManualLifeSaves.success) {
+      return;
+    }
+
+    const messages = [
+      initialLoadRef.current?.notice,
+      initialManualLifeSaves.success ? null : initialManualLifeSaves.error,
+    ].filter((message): message is string => !!message);
+
+    if (messages.length === 0) {
+      return;
+    }
+
+    Alert.alert("Save Data", messages.join("\n\n"));
+  }, [initialManualLifeSaves]);
 
   useEffect(() => {
     if (skipInitialAutosaveRef.current) {
@@ -478,6 +533,10 @@ export default function App() {
       }),
     [currentCharacter, currentDatingCandidatePool, currentDatingPreferences, household.currentYear]
   );
+  const currentCharacterHasDatingProfile = hasDatingProfileCreated(currentCharacter);
+  const isDatingSetupFlow =
+    !currentCharacterHasDatingProfile &&
+    (currentScreen === "datingApp" || currentScreen === "datingAppPreferences");
   const currentDatingProfile = useMemo(
     () =>
       activeDatingProfileId === null
@@ -525,6 +584,15 @@ export default function App() {
   const updateActiveDatingProfileId = (profileId: string | null) => {
     activeDatingProfileIdRef.current = profileId;
     setActiveDatingProfileId(profileId);
+  };
+  const refreshManualLifeSlots = () => {
+    const result = getManualLifeSaves();
+    if (!result.success) {
+      Alert.alert("Save Life", result.error);
+      return;
+    }
+
+    setManualLifeSlots(result.slots);
   };
   const selectedDatingMatch = useMemo(
     () =>
@@ -582,7 +650,6 @@ export default function App() {
     datingPreferencesDraftCharacterIdRef.current = currentCharacter.id;
     setDatingAgeFilter(getDatingAgeFilterFromPreferences(currentDatingPreferences));
     setDatingGenderFilter(currentDatingPreferences.gender);
-    setDatingAppSettingsVisible(false);
     setDiscoverEngineerViewVisible(false);
   }, [currentCharacter.id, currentDatingPreferences, currentScreen]);
 
@@ -592,7 +659,6 @@ export default function App() {
     }
 
     setDatingAppVisible(false);
-    setDatingAppSettingsVisible(false);
     setDiscoverEngineerViewVisible(false);
     setDatingMatchesVisible(false);
     setDatingScoreInfoVisible(false);
@@ -722,6 +788,19 @@ export default function App() {
         : null,
     [currentCharacter, partnerCharacter]
   );
+  const exRelationshipSummaries = useMemo(
+    () => getExRelationshipSummaries(currentCharacter, household.characters),
+    [currentCharacter, household.characters]
+  );
+  const selectedExRelationship = useMemo(
+    () =>
+      selectedExRelationshipId === null
+        ? null
+        : exRelationshipSummaries.find(
+            (relationship) => relationship.relationshipId === selectedExRelationshipId
+          ) ?? null,
+    [exRelationshipSummaries, selectedExRelationshipId]
+  );
   const isDatingPartner = activePartnerRelationship?.currentStatus === "Dating";
   const isEngagedWithPartner = activePartnerRelationship?.currentStatus === "Engaged";
   const isMarriedToPartner = activePartnerRelationship?.currentStatus === "Married";
@@ -733,11 +812,12 @@ export default function App() {
     !isMarriedToPartner;
   const selectedProposalRingCost = getProposalRingCost(proposalPlan.ring);
   const currentProposalCompatibility = currentCharacter.partner
-    ? getCompatibilityScore(currentCharacter, {
-        traits: currentCharacter.partner.traits,
-        job: currentCharacter.partner.job,
-        degree: currentCharacter.partner.degree,
-      })
+    ? partnerCharacter
+      ? getProposalCompatibilityScore({
+          person: currentCharacter,
+          otherPerson: partnerCharacter,
+        })
+      : 0
     : 0;
   const currentDiaryEntries = useMemo(
     () => [...currentCharacter.diary].reverse(),
@@ -790,20 +870,14 @@ export default function App() {
       return;
     }
 
-    const nextDatingPreferences = buildSavedDatingPreferences();
     updateActiveDatingProfileId(null);
     setCurrentScreen("datingAppDiscover");
     setHousehold((currentHousehold) => {
       const currentCharacter = getCurrentHouseholdCharacter(currentHousehold);
       const updatedCharacter = prepareDatingDiscoverCharacter({
-        character: {
-          ...currentCharacter,
-          genderPreference: nextDatingPreferences.gender,
-          datingPreferences: nextDatingPreferences,
-        },
+        character: currentCharacter,
         country: currentHousehold.country,
         currentYear: currentHousehold.currentYear,
-        datingPreferences: nextDatingPreferences,
       });
 
       return {
@@ -815,9 +889,61 @@ export default function App() {
         ),
       };
     });
-    setDatingAppSettingsVisible(false);
     setDiscoverEngineerViewVisible(false);
     setDatingMatchesVisible(false);
+    setMatchChanceBreakdownVisible(false);
+    setSelectedDatingMatchId(null);
+  };
+
+  const completeDatingProfileAndOpenDiscover = () => {
+    if (!ensureDatingAppAccess()) {
+      return;
+    }
+
+    const nextDatingPreferences = buildSavedDatingPreferences();
+    updateActiveDatingProfileId(null);
+    setCurrentScreen("datingAppDiscover");
+    setHousehold((currentHousehold) => {
+      const updatedCharacter = completeDatingProfileSetup({
+        character: getCurrentHouseholdCharacter(currentHousehold),
+        datingPreferences: nextDatingPreferences,
+        country: currentHousehold.country,
+        currentYear: currentHousehold.currentYear,
+      });
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === currentHousehold.currentCharacterId
+            ? updatedCharacter
+            : character
+        ),
+      };
+    });
+    setDiscoverEngineerViewVisible(false);
+    setDatingMatchesVisible(false);
+    setMatchChanceBreakdownVisible(false);
+    setSelectedDatingMatchId(null);
+  };
+
+  const saveDatingProfileAndStay = () => {
+    updateCurrentCharacter((character) => updateDatingProfile({ character }));
+    Alert.alert("Dating App", "Profile updated.");
+  };
+
+  const saveDatingPreferencesAndOpenDiscover = () => {
+    const nextDatingPreferences = buildSavedDatingPreferences();
+
+    updateCurrentCharacter((character) =>
+      updateDatingAppPreferences({
+        character,
+        datingPreferences: nextDatingPreferences,
+        country: household.country,
+        currentYear: household.currentYear,
+      })
+    );
+    updateActiveDatingProfileId(null);
+    setCurrentScreen("datingAppDiscover");
     setMatchChanceBreakdownVisible(false);
     setSelectedDatingMatchId(null);
   };
@@ -917,12 +1043,14 @@ export default function App() {
     }
 
     updateCurrentCharacter(() => resolution.character);
-    Alert.alert(
-      "Romance",
-      resolution.accepted
-        ? "The conversation went well."
-        : "The conversation felt flat."
-    );
+    const resultLines = [resolution.message];
+    if (resolution.friendshipChange !== 0) {
+      resultLines.push(`Friendship +${resolution.friendshipChange}`);
+    }
+    if (resolution.romanceChange !== 0) {
+      resultLines.push(`Romance +${resolution.romanceChange}`);
+    }
+    Alert.alert("Romance", resultLines.join("\n"));
   };
 
   const goOnDateWithSelectedMatch = (category: PartnerDateCategory) => {
@@ -1071,7 +1199,6 @@ export default function App() {
     setSelectedClassmateId(null);
     setFinancesVisible(false);
     setJobsVisible(false);
-    setRomanceTwoVisible(false);
     setFriendsVisible(false);
     setSelectedFriendId(null);
     setDatingAppVisible(false);
@@ -1080,7 +1207,6 @@ export default function App() {
     setDatingScoreInfoVisible(false);
     setDatingMatchesVisible(false);
     setMatchChanceBreakdownVisible(false);
-    setDatingAppSettingsVisible(false);
     setDiscoverEngineerViewVisible(false);
     setLookForJobsVisible(false);
     setFullTimeJobsVisible(false);
@@ -1109,12 +1235,408 @@ export default function App() {
     setCurrentScreen("home");
   };
 
+  const runManualLifeOperation = (
+    slotId: ManualSaveSlotId,
+    action: "save" | "load" | "delete",
+    operation: () => void
+  ) => {
+    if (!manualLifeOperationGuardRef.current.start(slotId, action)) {
+      return;
+    }
+
+    setManualLifeOperation({ slotId, action });
+    try {
+      operation();
+    } finally {
+      manualLifeOperationGuardRef.current.finish(slotId, action);
+      setManualLifeOperation((current) =>
+        current?.slotId === slotId && current.action === action ? null : current
+      );
+    }
+  };
+
+  const saveCurrentLifeToSlot = (slotId: ManualSaveSlotId) => {
+    runManualLifeOperation(slotId, "save", () => {
+      const result = saveLifeToSlot(slotId, latestHouseholdRef.current);
+      if (!result.success) {
+        Alert.alert("Save Life", result.error);
+        return;
+      }
+
+      refreshManualLifeSlots();
+      Alert.alert("Save Life", `Life saved to ${result.slot.slotLabel}.`);
+    });
+  };
+
+  const confirmSaveCurrentLifeToSlot = (slotId: ManualSaveSlotId) => {
+    const slot = manualLifeSlots.find((entry) => entry.slotId === slotId);
+    if (!slot) {
+      return;
+    }
+
+    if (!slot.summary) {
+      saveCurrentLifeToSlot(slotId);
+      return;
+    }
+
+    Alert.alert(
+      "Save Life",
+      `This will overwrite the existing life in ${slot.slotLabel}. Continue?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          onPress: () => saveCurrentLifeToSlot(slotId),
+        },
+      ]
+    );
+  };
+
+  const confirmLoadLifeFromSlot = (slotId: ManualSaveSlotId) => {
+    const slot = manualLifeSlots.find((entry) => entry.slotId === slotId);
+    if (!slot?.summary) {
+      return;
+    }
+
+    Alert.alert(
+      "Save Life",
+      "Loading this life will replace your current unsaved progress. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          onPress: () =>
+            runManualLifeOperation(slotId, "load", () => {
+              const result = loadLifeFromSlot(slotId);
+              if (!result.success) {
+                Alert.alert("Save Life", result.error);
+                return;
+              }
+
+              latestHouseholdRef.current = result.household;
+              setHousehold(result.household);
+              closeAllPanels();
+              setSelectedExRelationshipId(null);
+              setCurrentScreen("home");
+              refreshManualLifeSlots();
+              Alert.alert("Save Life", `Loaded ${result.slot.slotLabel}.`);
+            }),
+        },
+      ]
+    );
+  };
+
+  const confirmDeleteLifeSave = (slotId: ManualSaveSlotId) => {
+    const slot = manualLifeSlots.find((entry) => entry.slotId === slotId);
+    if (!slot?.summary) {
+      return;
+    }
+
+    Alert.alert(
+      "Save Life",
+      "Delete this saved life? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () =>
+            runManualLifeOperation(slotId, "delete", () => {
+              const result = deleteLifeSave(slotId);
+              if (!result.success) {
+                Alert.alert("Save Life", result.error);
+                return;
+              }
+
+              refreshManualLifeSlots();
+              Alert.alert(
+                "Save Life",
+                `${slot.slotLabel} was deleted.`
+              );
+            }),
+        },
+      ]
+    );
+  };
+
   const goToRomancePartnerPage = () => {
     closeAllPanels();
-    setCurrentScreen("home");
-    setRomanceTwoVisible(true);
+    setCurrentScreen("romance");
     setPartnerVisible(true);
     setSelectedDatingMatchId(null);
+    setSelectedExRelationshipId(null);
+  };
+
+  const renderCurrentPartnerDetails = () => {
+    if (!currentCharacter.partner) {
+      return null;
+    }
+
+    return (
+      <View style={styles.detailBox}>
+        <Text>{`Age: ${getDatingProfileAge(
+          currentCharacter.partner,
+          household.currentYear
+        )}`}</Text>
+        <Text>{`Friendship: ${currentCharacter.partner.friendshipScore}/100`}</Text>
+        <Text>{`Romance: ${currentCharacter.partner.romanceScore}/100`}</Text>
+        <Text style={styles.testingText}>{`Chemistry: ${
+          !currentCharacter.partner.chemistryUnlocked ||
+          currentCharacter.partner.chemistry === null
+            ? "???"
+            : `${currentCharacter.partner.chemistry}/100`
+        }`}</Text>
+        <Text style={styles.testingText}>{`Attraction: ${currentCharacter.partner.attractiveness}/100`}</Text>
+        <Text>{`Appearance: ${currentCharacter.partner.appearance}/100`}</Text>
+        <Text>{`Intelligence: ${currentCharacter.partner.intelligence}/100`}</Text>
+        <Text>{`Traits: ${labelList(currentCharacter.partner.traits)}`}</Text>
+        <Text>{`Job: ${currentCharacter.partner.job}`}</Text>
+        <Text>{`Income: ${formatMoney(
+          currentCharacter.partner.annualIncomeGBP,
+          household.country
+        )}`}</Text>
+        <Text>{`Race: ${currentCharacter.partner.race}`}</Text>
+        <Text style={styles.testingText}>
+          {scoreText("Career Ceiling", currentCharacter.partner.careerCeiling)}
+        </Text>
+        <Pressable
+          onPress={() => setPartnerActionsVisible((value) => !value)}
+          style={styles.innerBox}
+        >
+          <Text>Actions</Text>
+        </Pressable>
+        {partnerActionsVisible ? (
+          <View style={styles.detailBox}>
+            <Pressable onPress={spendTimeWithPartner} style={styles.innerBox}>
+              <Text>Spend Time Together</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setGoOnDateVisible((value) => !value)}
+              style={styles.innerBox}
+            >
+              <Text>Go on a Date</Text>
+            </Pressable>
+            {goOnDateVisible ? (
+              <View style={styles.detailBox}>
+                <Pressable
+                  onPress={() => goOnDateWithPartner("free")}
+                  style={styles.innerBox}
+                >
+                  <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => goOnDateWithPartner("cheap")}
+                  style={styles.innerBox}
+                >
+                  <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => goOnDateWithPartner("fun")}
+                  style={styles.innerBox}
+                >
+                  <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => goOnDateWithPartner("expensive")}
+                  style={styles.innerBox}
+                >
+                  <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => setConversationVisible((value) => !value)}
+              style={styles.innerBox}
+            >
+              <Text>Have a Conversation About…</Text>
+            </Pressable>
+            {conversationVisible ? (
+              <View style={styles.detailBox}>
+                {availableConversationTopics.includes("children") ? (
+                  <Pressable
+                    onPress={() => haveConversationWithPartner("children")}
+                    style={styles.innerBox}
+                  >
+                    <Text>Children</Text>
+                  </Pressable>
+                ) : null}
+                {availableConversationTopics.includes("marriage") ? (
+                  <Pressable
+                    onPress={() => haveConversationWithPartner("marriage")}
+                    style={styles.innerBox}
+                  >
+                    <Text>Marriage</Text>
+                  </Pressable>
+                ) : null}
+                {availableConversationTopics.includes("moving_in") ? (
+                  <Pressable
+                    onPress={() => haveConversationWithPartner("moving_in")}
+                    style={styles.innerBox}
+                  >
+                    <Text>Moving In Together</Text>
+                  </Pressable>
+                ) : null}
+                {availableConversationTopics.includes("boundaries") ? (
+                  <>
+                    <Pressable
+                      onPress={() => setBoundaryConversationVisible((value) => !value)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Boundaries</Text>
+                    </Pressable>
+                    {boundaryConversationVisible ? (
+                      <View style={styles.detailBox}>
+                        <Pressable
+                          onPress={() =>
+                            haveConversationWithPartner(
+                              "boundaries",
+                              "staying_close_with_an_ex"
+                            )
+                          }
+                          style={styles.innerBox}
+                        >
+                          <Text>Staying Close with an Ex</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() =>
+                            haveConversationWithPartner(
+                              "boundaries",
+                              "closed_vs_open_relationship"
+                            )
+                          }
+                          style={styles.innerBox}
+                        >
+                          <Text>Closed vs Open Relationship</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => setMajorDecisionsVisible((value) => !value)}
+              style={styles.innerBox}
+            >
+              <Text>Major Decisions</Text>
+            </Pressable>
+            {majorDecisionsVisible ? (
+              <View style={styles.detailBox}>
+                <Pressable
+                  onPress={() => showWipAlert("Move in Together")}
+                  style={styles.innerBox}
+                >
+                  <Text>Move in Together - WIP</Text>
+                </Pressable>
+                {canOpenProposalPlanning ? (
+                  <Pressable
+                    onPress={openProposalPlanning}
+                    style={styles.innerBox}
+                  >
+                    <Text>Propose</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => showWipAlert("Try for a Baby")}
+                  style={styles.innerBox}
+                >
+                  <Text>Try for a Baby - WIP</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => showWipAlert("Purchase a Property Together")}
+                  style={styles.innerBox}
+                >
+                  <Text>Purchase a Property Together - WIP</Text>
+                </Pressable>
+                {isEngagedWithPartner ? (
+                  <>
+                    <Pressable
+                      onPress={() => showWipAlert("Plan Wedding")}
+                      style={styles.innerBox}
+                    >
+                      <Text>Plan Wedding - WIP</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => showWipAlert("Elope")}
+                      style={styles.innerBox}
+                    >
+                      <Text>Elope - WIP</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+                {isMarriedToPartner ? (
+                  <>
+                    <Pressable
+                      onPress={() => showWipAlert("Combine Finances")}
+                      style={styles.innerBox}
+                    >
+                      <Text>Combine Finances</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => showWipAlert("Separate Finances")}
+                      style={styles.innerBox}
+                    >
+                      <Text>Separate Finances</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => setConflictVisible((value) => !value)}
+              style={styles.innerBox}
+            >
+              <Text>Conflict</Text>
+            </Pressable>
+            {conflictVisible ? (
+              <View style={styles.detailBox}>
+                <Pressable
+                  disabled={availableConflictIssues.length === 0}
+                  onPress={undefined}
+                  style={styles.innerBox}
+                >
+                  <Text>Confront About…</Text>
+                </Pressable>
+                <Pressable
+                  onPress={askPartnerForSpaceAction}
+                  style={styles.innerBox}
+                >
+                  <Text>Ask for Space</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => showWipAlert("Ask them to Move Out")}
+                  style={styles.innerBox}
+                >
+                  <Text>Ask them to Move Out - WIP</Text>
+                </Pressable>
+                <Pressable
+                  onPress={bickerWithCurrentPartner}
+                  style={styles.innerBox}
+                >
+                  <Text>Bicker</Text>
+                </Pressable>
+                {isDatingPartner || isEngagedWithPartner ? (
+                  <Pressable
+                    onPress={breakUpOrDivorceCurrentPartner}
+                    style={styles.innerBox}
+                  >
+                    <Text>Break Up</Text>
+                  </Pressable>
+                ) : null}
+                {isMarriedToPartner ? (
+                  <Pressable
+                    onPress={breakUpOrDivorceCurrentPartner}
+                    style={styles.innerBox}
+                  >
+                    <Text>Divorce</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    );
   };
 
   const renderProposalSlider = (
@@ -1469,6 +1991,16 @@ export default function App() {
   }
 
   if (currentScreen === "romance") {
+    const romancePageSections = getRomancePageSections({
+      hasActivePartner: !!partnerCharacter && !!activePartnerRelationship,
+      hasExes: exRelationshipSummaries.length > 0,
+    });
+    const currentPartnerLabel =
+      partnerCharacter && activePartnerRelationship
+        ? getRelationshipLabel(partnerCharacter, currentCharacter, household.characters) ??
+          activePartnerRelationship.currentStatus
+        : null;
+
     return (
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.container}>
@@ -1485,25 +2017,251 @@ export default function App() {
             <Text style={styles.screenTitle}>Romance</Text>
           </View>
 
-          <Pressable
-            onPress={() => {
-              if (!ensureDatingAppAccess()) {
-                return;
-              }
+          {romancePageSections.map((section) => {
+            if (
+              section === "current_partner" &&
+              partnerCharacter &&
+              activePartnerRelationship &&
+              currentPartnerLabel
+            ) {
+              return (
+                <View key={section} style={styles.box}>
+                  <Pressable
+                    onPress={() => setPartnerVisible((value) => !value)}
+                    style={styles.innerBox}
+                  >
+                    <Text style={styles.fieldSectionTitle}>Current Partner</Text>
+                    <Text>{`${partnerCharacter.firstName} ${partnerCharacter.lastName}`}</Text>
+                    <Text>{currentPartnerLabel}</Text>
+                  </Pressable>
+                  {partnerVisible ? renderCurrentPartnerDetails() : null}
+                </View>
+              );
+            }
 
-              setCurrentScreen("datingApp");
-            }}
-            style={styles.box}
-          >
-            <Text>Dating App</Text>
-          </Pressable>
+            if (section === "exes") {
+              return (
+                <Pressable
+                  key={section}
+                  onPress={() => {
+                    setSelectedExRelationshipId(null);
+                    setCurrentScreen("romanceExes");
+                  }}
+                  style={styles.box}
+                >
+                  <Text style={styles.fieldSectionTitle}>Exes</Text>
+                  <Text>{`${exRelationshipSummaries.length} recorded`}</Text>
+                </Pressable>
+              );
+            }
 
-          <Pressable
-            onPress={() => Alert.alert("Night Out", "Coming soon")}
-            style={styles.box}
-          >
-            <Text>Night Out</Text>
-          </Pressable>
+            if (section === "dating_app") {
+              return (
+                <Pressable
+                  key={section}
+                  onPress={() => {
+                    if (!ensureDatingAppAccess()) {
+                      return;
+                    }
+
+                    setCurrentScreen(
+                      getDatingAppLaunchSection(currentCharacter) === "discover"
+                        ? "datingAppDiscover"
+                        : "datingApp"
+                    );
+                  }}
+                  style={styles.box}
+                >
+                  <Text>Dating App</Text>
+                </Pressable>
+              );
+            }
+
+            return (
+              <Pressable
+                key={section}
+                onPress={() => Alert.alert("Night Out", "Coming soon")}
+                style={styles.box}
+              >
+                <Text>Night Out</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "saveLife") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable onPress={goToHomeScreen} style={styles.headerBackButton}>
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Save Life</Text>
+          </View>
+
+          {manualLifeSlots.map((slot) => {
+            const slotBusy = manualLifeOperation?.slotId === slot.slotId;
+
+            return (
+              <View key={slot.slotId} style={styles.box}>
+                <Text style={styles.fieldSectionTitle}>{slot.slotLabel}</Text>
+                {slot.summary ? (
+                  <View style={styles.detailGroup}>
+                    <Text>{slot.summary.activeCharacterName}</Text>
+                    <Text>{`Age: ${slot.summary.activeCharacterAge}`}</Text>
+                    <Text>{`Year: ${slot.summary.currentYear}`}</Text>
+                    <Text>{`Country: ${slot.summary.country}`}</Text>
+                    <Text>{`Saved: ${new Date(slot.summary.savedAt).toLocaleString()}`}</Text>
+                    <Text>{`Occupation: ${slot.summary.occupation}`}</Text>
+                    <Text>{`Household Size: ${slot.summary.householdSize}`}</Text>
+                    {slot.summary.relationshipStatus ? (
+                      <Text>{`Relationship Status: ${slot.summary.relationshipStatus}`}</Text>
+                    ) : null}
+                  </View>
+                ) : (
+                  <Text>Empty Slot</Text>
+                )}
+
+                <Pressable
+                  disabled={slotBusy}
+                  onPress={() => confirmSaveCurrentLifeToSlot(slot.slotId)}
+                  style={styles.innerBox}
+                >
+                  <Text>
+                    {slot.summary ? "Overwrite with Current Life" : "Save Current Life"}
+                  </Text>
+                </Pressable>
+
+                {slot.summary ? (
+                  <>
+                    <Pressable
+                      disabled={slotBusy}
+                      onPress={() => confirmLoadLifeFromSlot(slot.slotId)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Load</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={slotBusy}
+                      onPress={() => confirmDeleteLifeSave(slot.slotId)}
+                      style={styles.innerBox}
+                    >
+                      <Text>Delete</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+
+                {slotBusy ? <Text>Working…</Text> : null}
+              </View>
+            );
+          })}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "romanceExes") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable
+              onPress={() => {
+                setSelectedExRelationshipId(null);
+                setCurrentScreen("romance");
+              }}
+              style={styles.headerBackButton}
+            >
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Exes</Text>
+          </View>
+
+          {exRelationshipSummaries.map((exRelationship) => (
+            <Pressable
+              key={`${exRelationship.relationshipId}:${exRelationship.partnerPersonId}`}
+              onPress={() => {
+                setSelectedExRelationshipId(exRelationship.relationshipId);
+                setCurrentScreen("romanceExDetails");
+              }}
+              style={styles.box}
+            >
+              <Text>{exRelationship.name}</Text>
+              <Text>{exRelationship.finalStatus}</Text>
+              <Text>{`Started: ${exRelationship.startYear}`}</Text>
+              <Text>{`Ended: ${exRelationship.endYear ?? "Unknown"}`}</Text>
+              {exRelationship.endReason ? (
+                <Text>{`Reason: ${exRelationship.endReason}`}</Text>
+              ) : null}
+            </Pressable>
+          ))}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "romanceExDetails" && selectedExRelationship) {
+    const relevantMemories = currentCharacter.memories.filter(
+      (memory) =>
+        memory.partnerId === selectedExRelationship.partnerPersonId ||
+        memory.relationshipId === selectedExRelationship.relationshipId
+    );
+
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable
+              onPress={() => setCurrentScreen("romanceExes")}
+              style={styles.headerBackButton}
+            >
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Ex Details</Text>
+          </View>
+
+          <View style={styles.box}>
+            <Text>{selectedExRelationship.name}</Text>
+            <Text>{selectedExRelationship.finalStatus}</Text>
+            <Text>{`Started: ${selectedExRelationship.startYear}`}</Text>
+            <Text>{`Ended: ${selectedExRelationship.endYear ?? "Unknown"}`}</Text>
+            <Text>{`Reason: ${selectedExRelationship.endReason ?? "Unknown"}`}</Text>
+          </View>
+
+          {relevantMemories.length > 0 ? (
+            <View style={styles.box}>
+              <Text style={styles.fieldSectionTitle}>Memories</Text>
+              {relevantMemories.map((memory) => (
+                <Text key={memory.id}>{memory.text}</Text>
+              ))}
+            </View>
+          ) : null}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "romanceExDetails") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable
+              onPress={() => setCurrentScreen("romanceExes")}
+              style={styles.headerBackButton}
+            >
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Ex Details</Text>
+          </View>
+
+          <View style={styles.box}>
+            <Text>Unknown Ex</Text>
+          </View>
         </ScrollView>
       </SafeAreaView>
     );
@@ -1672,13 +2430,20 @@ export default function App() {
         playerAge={currentCharacterAge}
         occupation={currentDatingAppOccupation}
         country={household.country}
-        onBack={() => setCurrentScreen("romance")}
+        isSetupFlow={isDatingSetupFlow}
+        onBack={() =>
+          setCurrentScreen(isDatingSetupFlow ? "romance" : "datingAppDiscover")
+        }
         onClose={() => {
           closeAllPanels();
           setCurrentScreen("home");
         }}
         onHome={goToHomeScreen}
-        onNext={() => setCurrentScreen("datingAppPreferences")}
+        onSaveProfile={saveDatingProfileAndStay}
+        onDiscover={openDatingDiscover}
+        onMatches={() => setCurrentScreen("datingAppMatches")}
+        onPreferences={() => setCurrentScreen("datingAppPreferences")}
+        onProfile={() => setCurrentScreen("datingApp")}
       />
     );
   }
@@ -1687,11 +2452,16 @@ export default function App() {
     return (
       <DatingPreferencesScreen
         styles={styles}
-        introText="Who are you looking for?"
+        introText={
+          isDatingSetupFlow ? "Who are you looking for?" : "Update your dating preferences."
+        }
         resolvedDatingAgeFilter={resolvedDatingAgeFilter}
         maximumAgeLabel={formatDatingAgeLabel(resolvedDatingAgeFilter.maximumAge)}
         resolvedDatingGenderFilter={resolvedDatingGenderFilter}
-        onBack={() => setCurrentScreen("datingApp")}
+        isSetupFlow={isDatingSetupFlow}
+        onBack={() =>
+          setCurrentScreen(isDatingSetupFlow ? "datingApp" : "datingAppDiscover")
+        }
         onClose={() => {
           closeAllPanels();
           setCurrentScreen("home");
@@ -1726,7 +2496,15 @@ export default function App() {
           )
         }
         onSelectGender={setDatingGenderFilter}
-        onCreateProfile={openDatingDiscover}
+        onConfirm={
+          isDatingSetupFlow
+            ? completeDatingProfileAndOpenDiscover
+            : saveDatingPreferencesAndOpenDiscover
+        }
+        onDiscover={openDatingDiscover}
+        onMatches={() => setCurrentScreen("datingAppMatches")}
+        onPreferences={() => setCurrentScreen("datingAppPreferences")}
+        onProfile={() => setCurrentScreen("datingApp")}
       />
     );
   }
@@ -1750,21 +2528,11 @@ export default function App() {
         discoverEngineerViewVisible={discoverEngineerViewVisible}
         datingActionInProgress={datingActionInProgress}
         datingMatchLimitReached={datingMatchLimitReached}
-        datingAppSettingsVisible={datingAppSettingsVisible}
         onHome={goToHomeScreen}
-        onToggleSettings={() => setDatingAppSettingsVisible((current) => !current)}
-        onSeeMatches={() => {
-          setDatingAppSettingsVisible(false);
-          setCurrentScreen("datingAppMatches");
-        }}
-        onUpdatePreferences={() => {
-          setDatingAppSettingsVisible(false);
-          setCurrentScreen("datingAppPreferences");
-        }}
-        onUpdateProfile={() => {
-          setDatingAppSettingsVisible(false);
-          setCurrentScreen("datingApp");
-        }}
+        onDiscover={openDatingDiscover}
+        onMatches={() => setCurrentScreen("datingAppMatches")}
+        onPreferences={() => setCurrentScreen("datingAppPreferences")}
+        onProfile={() => setCurrentScreen("datingApp")}
         onToggleEngineerView={() =>
           setDiscoverEngineerViewVisible((current) => !current)
         }
@@ -1787,6 +2555,10 @@ export default function App() {
           setCurrentScreen("home");
         }}
         onHome={goToHomeScreen}
+        onDiscover={openDatingDiscover}
+        onMatches={() => setCurrentScreen("datingAppMatches")}
+        onPreferences={() => setCurrentScreen("datingAppPreferences")}
+        onProfile={() => setCurrentScreen("datingApp")}
         onOpenMatch={(matchId) => {
           setSelectedDatingMatchId(matchId);
           setMatchDetailsEngineerViewVisible(false);
@@ -1824,6 +2596,10 @@ export default function App() {
         dateCategoryRanges={dateCategoryRanges}
         onBack={() => setCurrentScreen("datingAppMatches")}
         onHome={goToHomeScreen}
+        onDiscover={openDatingDiscover}
+        onMatches={() => setCurrentScreen("datingAppMatches")}
+        onPreferences={() => setCurrentScreen("datingAppPreferences")}
+        onProfile={() => setCurrentScreen("datingApp")}
         onToggleEngineerView={() =>
           setMatchDetailsEngineerViewVisible((current) => !current)
         }
@@ -2545,8 +3321,7 @@ export default function App() {
       setHousehold(nextHousehold);
       setProposalConfirmationVisible(false);
       closeAllPanels();
-      setCurrentScreen("home");
-      setRomanceTwoVisible(true);
+      setCurrentScreen("romance");
       setPartnerVisible(result.result.outcome !== "dumped");
 
       Alert.alert("Romance", getProposalOutcomeMessage(result.result.outcome));
@@ -2726,6 +3501,16 @@ export default function App() {
             </Pressable>
           </SectionCard>
         ) : null}
+
+        <Pressable
+          onPress={() => {
+            refreshManualLifeSlots();
+            setCurrentScreen("saveLife");
+          }}
+          style={styles.box}
+        >
+          <Text>Save Life</Text>
+        </Pressable>
         <Pressable
           onPress={() =>
             toggleTopLevelPanel(familyStatsVisible, setFamilyStatsVisible)
@@ -2862,526 +3647,6 @@ export default function App() {
         >
           <Text>Romance</Text>
         </Pressable>
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(romanceTwoVisible, setRomanceTwoVisible)}
-          style={styles.box}
-        >
-          <Text>Romance 2</Text>
-        </Pressable>
-
-        {romanceTwoVisible ? (
-          <View style={styles.box}>
-            <Pressable
-              style={styles.innerBox}
-              onPress={() =>
-                currentCharacter.partner
-                  ? setPartnerVisible((value) => !value)
-                  : undefined
-              }
-            >
-              <Text>{`Partner: ${
-                currentCharacter.partner
-                  ? `${currentCharacter.partner.firstName} ${currentCharacter.partner.lastName}`
-                  : "No partner"
-              }`}</Text>
-            </Pressable>
-            {currentCharacter.partner && partnerVisible ? (
-              <View style={styles.detailBox}>
-                <Text>{`Age: ${getDatingProfileAge(
-                  currentCharacter.partner,
-                  household.currentYear
-                )}`}</Text>
-                <Text>{`Friendship: ${currentCharacter.partner.friendshipScore}/100`}</Text>
-                <Text>{`Romance: ${currentCharacter.partner.romanceScore}/100`}</Text>
-                <Text style={styles.testingText}>{`Chemistry: ${
-                  !currentCharacter.partner.chemistryUnlocked ||
-                  currentCharacter.partner.chemistry === null
-                    ? "???"
-                    : `${currentCharacter.partner.chemistry}/100`
-                }`}</Text>
-                <Text style={styles.testingText}>{`Attraction: ${currentCharacter.partner.attractiveness}/100`}</Text>
-                <Text>{`Appearance: ${currentCharacter.partner.appearance}/100`}</Text>
-                <Text>{`Intelligence: ${currentCharacter.partner.intelligence}/100`}</Text>
-                <Text>{`Traits: ${labelList(currentCharacter.partner.traits)}`}</Text>
-                <Text>{`Job: ${currentCharacter.partner.job}`}</Text>
-                <Text>{`Income: ${formatMoney(
-                  currentCharacter.partner.annualIncomeGBP,
-                  household.country
-                )}`}</Text>
-                <Text>{`Race: ${currentCharacter.partner.race}`}</Text>
-                <Text style={styles.testingText}>
-                  {scoreText("Career Ceiling", currentCharacter.partner.careerCeiling)}
-                </Text>
-                <Pressable
-                  onPress={() => setPartnerActionsVisible((value) => !value)}
-                  style={styles.innerBox}
-                >
-                  <Text>Actions</Text>
-                </Pressable>
-                {partnerActionsVisible ? (
-                  <View style={styles.detailBox}>
-                    <Pressable
-                      onPress={spendTimeWithPartner}
-                      style={styles.innerBox}
-                    >
-                      <Text>Spend Time Together</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => setGoOnDateVisible((value) => !value)}
-                      style={styles.innerBox}
-                    >
-                      <Text>Go on a Date</Text>
-                    </Pressable>
-                    {goOnDateVisible ? (
-                      <View style={styles.detailBox}>
-                        <Pressable
-                          onPress={() => goOnDateWithPartner("free")}
-                          style={styles.innerBox}
-                        >
-                          <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => goOnDateWithPartner("cheap")}
-                          style={styles.innerBox}
-                        >
-                          <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => goOnDateWithPartner("fun")}
-                          style={styles.innerBox}
-                        >
-                          <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => goOnDateWithPartner("expensive")}
-                          style={styles.innerBox}
-                        >
-                          <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
-                        </Pressable>
-                      </View>
-                    ) : null}
-                    <Pressable
-                      onPress={() => setConversationVisible((value) => !value)}
-                      style={styles.innerBox}
-                    >
-                      <Text>Have a Conversation About…</Text>
-                    </Pressable>
-                    {conversationVisible ? (
-                      <View style={styles.detailBox}>
-                        {availableConversationTopics.includes("children") ? (
-                          <Pressable
-                            onPress={() => haveConversationWithPartner("children")}
-                            style={styles.innerBox}
-                          >
-                            <Text>Children</Text>
-                          </Pressable>
-                        ) : null}
-                        {availableConversationTopics.includes("marriage") ? (
-                          <Pressable
-                            onPress={() => haveConversationWithPartner("marriage")}
-                            style={styles.innerBox}
-                          >
-                            <Text>Marriage</Text>
-                          </Pressable>
-                        ) : null}
-                        {availableConversationTopics.includes("moving_in") ? (
-                          <Pressable
-                            onPress={() => haveConversationWithPartner("moving_in")}
-                            style={styles.innerBox}
-                          >
-                            <Text>Moving In Together</Text>
-                          </Pressable>
-                        ) : null}
-                        {availableConversationTopics.includes("boundaries") ? (
-                          <>
-                            <Pressable
-                              onPress={() => setBoundaryConversationVisible((value) => !value)}
-                              style={styles.innerBox}
-                            >
-                              <Text>Boundaries</Text>
-                            </Pressable>
-                            {boundaryConversationVisible ? (
-                              <View style={styles.detailBox}>
-                                <Pressable
-                                  onPress={() =>
-                                    haveConversationWithPartner(
-                                      "boundaries",
-                                      "staying_close_with_an_ex"
-                                    )
-                                  }
-                                  style={styles.innerBox}
-                                >
-                                  <Text>Staying Close with an Ex</Text>
-                                </Pressable>
-                                <Pressable
-                                  onPress={() =>
-                                    haveConversationWithPartner(
-                                      "boundaries",
-                                      "closed_vs_open_relationship"
-                                    )
-                                  }
-                                  style={styles.innerBox}
-                                >
-                                  <Text>Closed vs Open Relationship</Text>
-                                </Pressable>
-                              </View>
-                            ) : null}
-                          </>
-                        ) : null}
-                      </View>
-                    ) : null}
-                    <Pressable
-                      onPress={() => setMajorDecisionsVisible((value) => !value)}
-                      style={styles.innerBox}
-                    >
-                      <Text>Major Decisions</Text>
-                    </Pressable>
-                    {majorDecisionsVisible ? (
-                      <View style={styles.detailBox}>
-                        <Pressable
-                          onPress={() => showWipAlert("Move in Together")}
-                          style={styles.innerBox}
-                        >
-                          <Text>Move in Together - WIP</Text>
-                        </Pressable>
-                        {canOpenProposalPlanning ? (
-                          <Pressable
-                            onPress={openProposalPlanning}
-                            style={styles.innerBox}
-                          >
-                            <Text>Propose</Text>
-                          </Pressable>
-                        ) : null}
-                        <Pressable
-                          onPress={() => showWipAlert("Try for a Baby")}
-                          style={styles.innerBox}
-                        >
-                          <Text>Try for a Baby - WIP</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => showWipAlert("Purchase a Property Together")}
-                          style={styles.innerBox}
-                        >
-                          <Text>Purchase a Property Together - WIP</Text>
-                        </Pressable>
-                        {isEngagedWithPartner ? (
-                          <>
-                            <Pressable
-                              onPress={() => showWipAlert("Plan Wedding")}
-                              style={styles.innerBox}
-                            >
-                              <Text>Plan Wedding - WIP</Text>
-                            </Pressable>
-                            <Pressable
-                              onPress={() => showWipAlert("Elope")}
-                              style={styles.innerBox}
-                            >
-                              <Text>Elope - WIP</Text>
-                            </Pressable>
-                          </>
-                        ) : null}
-                        {isMarriedToPartner ? (
-                          <>
-                            <Pressable
-                              onPress={() => showWipAlert("Combine Finances")}
-                              style={styles.innerBox}
-                            >
-                              <Text>Combine Finances</Text>
-                            </Pressable>
-                            <Pressable
-                              onPress={() => showWipAlert("Separate Finances")}
-                              style={styles.innerBox}
-                            >
-                              <Text>Separate Finances</Text>
-                            </Pressable>
-                          </>
-                        ) : null}
-                      </View>
-                    ) : null}
-                    <Pressable
-                      onPress={() => setConflictVisible((value) => !value)}
-                      style={styles.innerBox}
-                    >
-                      <Text>Conflict</Text>
-                    </Pressable>
-                    {conflictVisible ? (
-                      <View style={styles.detailBox}>
-                        <Pressable
-                          disabled={availableConflictIssues.length === 0}
-                          onPress={undefined}
-                          style={styles.innerBox}
-                        >
-                          <Text>Confront About…</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={askPartnerForSpaceAction}
-                          style={styles.innerBox}
-                        >
-                          <Text>Ask for Space</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => showWipAlert("Ask them to Move Out")}
-                          style={styles.innerBox}
-                        >
-                          <Text>Ask them to Move Out - WIP</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={bickerWithCurrentPartner}
-                          style={styles.innerBox}
-                        >
-                          <Text>Bicker</Text>
-                        </Pressable>
-                        {isDatingPartner || isEngagedWithPartner ? (
-                          <Pressable
-                            onPress={breakUpOrDivorceCurrentPartner}
-                            style={styles.innerBox}
-                          >
-                            <Text>Break Up</Text>
-                          </Pressable>
-                        ) : null}
-                        {isMarriedToPartner ? (
-                          <Pressable
-                            onPress={breakUpOrDivorceCurrentPartner}
-                            style={styles.innerBox}
-                          >
-                            <Text>Divorce</Text>
-                          </Pressable>
-                        ) : null}
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
-                <Pressable
-                  onPress={() => {
-                    setPartnerActionsVisible(false);
-                    setGoOnDateVisible(false);
-                    setConversationVisible(false);
-                    setBoundaryConversationVisible(false);
-                    setMajorDecisionsVisible(false);
-                    setConflictVisible(false);
-                    setPartnerVisible(false);
-                  }}
-                  style={styles.innerBox}
-                >
-                  <Text>Close</Text>
-                </Pressable>
-              </View>
-            ) : null}
-            {!currentCharacter.partner ? (
-              <Text>Try the dating app.</Text>
-            ) : null}
-            <Pressable
-              onPress={() => {
-                if (!ensureDatingAppAccess()) {
-                  return;
-                }
-
-                setDatingAppVisible((value) => !value);
-              }}
-              style={styles.innerBox}
-            >
-              <Text>Dating App</Text>
-            </Pressable>
-
-            {datingAppVisible ? (
-              <View style={styles.detailBox}>
-                <View style={styles.jobsHeaderRow}>
-                  <Text style={styles.testingText}>{`Dating Score: ${currentDatingScore}/100`}</Text>
-                  <Pressable
-                    onPress={() => setDatingScoreInfoVisible((value) => !value)}
-                    style={styles.questionButton}
-                  >
-                    <Text>?</Text>
-                  </Pressable>
-                </View>
-                {datingScoreInfoVisible ? (
-                  <Text style={styles.testingText}>
-                    Dating score uses appearance, reputation, high income, and traits.
-                  </Text>
-                ) : null}
-                <View style={styles.innerBox}>
-                  <Text>{`Looking For Gender: ${currentDatingPreferences.gender}`}</Text>
-                </View>
-                <View style={styles.innerBox}>
-                  <Text>{`Looking For Age: ${currentDatingAgeFilterLabel}`}</Text>
-                </View>
-                <Pressable onPress={startSwiping} style={styles.innerBox}>
-                  <Text>Start Swiping</Text>
-                </Pressable>
-                <Text>{`Refreshes Remaining: ${currentCharacter.datingRefreshesRemaining}/2`}</Text>
-                <Text>{`Matches: ${activeDatingMatches.length}/7`}</Text>
-                <Pressable onPress={refreshDatingMatches} style={styles.innerBox}>
-                  <Text>Refresh Dating App</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setDatingMatchesVisible((value) => !value)}
-                  style={styles.innerBox}
-                >
-                  <Text>Matches</Text>
-                </Pressable>
-                {currentDatingProfile ? (
-                  <View style={styles.innerBox}>
-                    <Text>{`${currentDatingProfile.firstName} ${currentDatingProfile.lastName}`}</Text>
-                    <Text>{`Age: ${getDatingProfileAge(
-                      currentDatingProfile,
-                      household.currentYear
-                    )}`}</Text>
-                    <Text>{`Appearance: ${currentDatingProfile.appearance}/100`}</Text>
-                    <Text>{`Job: ${currentDatingProfile.job}`}</Text>
-                    <Text>Traits: ???</Text>
-                    <Text>{`Attractiveness: ${currentDatingProfile.attractiveness}/100`}</Text>
-                    <Text style={styles.testingText}>{`Intelligence: ${currentDatingProfile.intelligence}/100`}</Text>
-                    <Text style={styles.testingText}>{`Chemistry: ${currentProfileChemistry ?? "???"}/100`}</Text>
-                    <View style={styles.jobsHeaderRow}>
-                      <Text style={styles.testingText}>{`Match Chance: ${currentProfileMatchChance}%`}</Text>
-                      <Pressable
-                        onPress={() =>
-                          setMatchChanceBreakdownVisible((value) => !value)
-                        }
-                        style={styles.questionButton}
-                      >
-                        <Text>?</Text>
-                      </Pressable>
-                    </View>
-                    <Text style={styles.testingText}>{`Rose Match Chance: ${currentProfileRoseMatchChance}%`}</Text>
-                    {matchChanceBreakdownVisible && currentMatchChanceBreakdown ? (
-                      <View style={styles.detailBox}>
-                        {currentMatchChanceBreakdown.entries.map((entry, index) => (
-                          <Text key={`${entry.label}-${index}`} style={styles.testingText}>
-                            {`${entry.label}: ${entry.value >= 0 ? "+" : ""}${entry.value}`}
-                          </Text>
-                        ))}
-                        {currentMatchChanceBreakdown.compatibilityEntries.map((entry, index) => (
-                          <Text
-                            key={`compatibility-${entry.label}-${index}`}
-                            style={styles.testingText}
-                          >
-                            {`${entry.label}: ${entry.value >= 0 ? "+" : ""}${entry.value}`}
-                          </Text>
-                        ))}
-                        <Text style={styles.testingText}>
-                          {`Final result: ${currentMatchChanceBreakdown.finalChance}%`}
-                        </Text>
-                      </View>
-                    ) : null}
-                    <Pressable
-                      disabled={datingActionInProgress}
-                      onPress={() => handleDatingProfileAction("pass")}
-                      style={styles.innerBox}
-                    >
-                      <Text>Pass</Text>
-                    </Pressable>
-                    <Pressable
-                      disabled={datingActionInProgress || datingMatchLimitReached}
-                      onPress={
-                        datingActionInProgress || datingMatchLimitReached
-                          ? undefined
-                          : () => handleDatingProfileAction("like")
-                      }
-                      style={styles.innerBox}
-                    >
-                      <Text>Like</Text>
-                    </Pressable>
-                    <Pressable
-                      disabled={
-                        datingActionInProgress ||
-                        currentDatingRoseState.remaining <= 0 ||
-                        datingMatchLimitReached
-                      }
-                      onPress={
-                        datingActionInProgress ||
-                        currentDatingRoseState.remaining <= 0 ||
-                        datingMatchLimitReached
-                          ? undefined
-                          : () => handleDatingProfileAction("rose")
-                      }
-                      style={styles.innerBox}
-                    >
-                      <Text>Send a Rose</Text>
-                    </Pressable>
-                  </View>
-                ) : (
-                  <Text>No more profiles right now.</Text>
-                )}
-                {datingMatchesVisible ? (
-                  <View style={styles.detailBox}>
-                    {activeDatingMatches.length === 0 ? (
-                      <Text>No matches yet.</Text>
-                    ) : (
-                      activeDatingMatches.map((match) => (
-                        <View key={match.id} style={styles.innerBox}>
-                          <Pressable
-                            onPress={() =>
-                              setSelectedDatingMatchId((current) =>
-                                current === match.id ? null : match.id
-                              )
-                            }
-                          >
-                            <Text>{`${match.firstName} ${match.lastName}`}</Text>
-                          </Pressable>
-                          {selectedDatingMatchId === match.id ? (
-                            <View style={styles.detailBox}>
-                              <Text>{`Age: ${getDatingProfileAge(
-                                match,
-                                household.currentYear
-                              )}`}</Text>
-                              <Text>{`Appearance: ${match.appearance}/100`}</Text>
-                              <Text>{`Intelligence: ${match.intelligence}/100`}</Text>
-                              <Text>{`Job: ${match.job}`}</Text>
-                              <Text>{`Traits: ${labelList(match.traits)}`}</Text>
-                              <Text style={styles.testingText}>{`Attractiveness: ${match.attractiveness}/100`}</Text>
-                              <Text style={styles.testingText}>{`Chemistry: ${
-                                match.chemistry === null ? "???" : `${match.chemistry}/100`
-                              }`}</Text>
-                              <Text>{`Friendship: ${match.friendshipScore}/100`}</Text>
-                              <Text>{`Romance: ${match.romanceScore}/100`}</Text>
-                              <Pressable
-                                onPress={() => interactWithMatch(match.id)}
-                                style={styles.innerBox}
-                              >
-                                <Text>Text</Text>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => {
-                                  setSelectedDatingMatchId(match.id);
-                                  setMatchDetailsEngineerViewVisible(false);
-                                  setMatchGoOnDateVisible(true);
-                                  setCurrentScreen("datingAppMatchDetails");
-                                }}
-                                style={styles.innerBox}
-                              >
-                                <Text>Go On A Date</Text>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => askToBePartner(match.id)}
-                                style={styles.innerBox}
-                              >
-                                <Text>Ask To Be Partner</Text>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => unmatchProfile(match.id)}
-                                style={styles.innerBox}
-                              >
-                                <Text>Unmatch</Text>
-                              </Pressable>
-                            </View>
-                          ) : null}
-                        </View>
-                      ))
-                    )}
-                  </View>
-                ) : null}
-              </View>
-            ) : null}
-            <Pressable
-              onPress={() => setRomanceTwoVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
         <Pressable
           onPress={() => toggleTopLevelPanel(friendsVisible, setFriendsVisible)}

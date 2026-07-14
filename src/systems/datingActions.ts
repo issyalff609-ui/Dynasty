@@ -178,6 +178,9 @@ export const resolveDatingMatchTextInteraction = ({
 }): {
   character: Character;
   accepted: boolean;
+  friendshipChange: number;
+  romanceChange: number;
+  message: string;
 } | null => {
   const match = character.datingMatches.find((item) => item.id === matchId);
   if (!match || !match.matched) {
@@ -198,8 +201,18 @@ export const resolveDatingMatchTextInteraction = ({
   );
   const accepted = Math.random() < interactionChance;
 
+  let interactionResult = null as ReturnType<typeof applyDatingInteraction> | null;
+
+  const resolvedInteractionResult =
+    interactionResult ?? {
+      accepted,
+      friendshipChange: 0,
+      romanceChange: 0,
+      message: accepted ? "The conversation went well." : "The conversation felt flat.",
+      match,
+    };
+
   return {
-    accepted,
     character: {
       ...character,
       datingMatches: character.datingMatches
@@ -208,10 +221,14 @@ export const resolveDatingMatchTextInteraction = ({
             return currentMatch;
           }
 
-          return applyDatingInteraction(character, currentMatch, "text", accepted);
+          return resolvedInteractionResult.match;
         })
         .sort((a, b) => Number(b.interacted) - Number(a.interacted)),
     },
+    accepted: resolvedInteractionResult.accepted,
+    friendshipChange: resolvedInteractionResult.friendshipChange,
+    romanceChange: resolvedInteractionResult.romanceChange,
+    message: resolvedInteractionResult.message,
   };
 };
 

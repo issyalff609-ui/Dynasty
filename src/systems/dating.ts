@@ -180,6 +180,14 @@ export type MatchChanceBreakdownEntry = {
   value: number;
 };
 
+export type DatingInteractionOutcome = {
+  accepted: boolean;
+  match: DatingProfile;
+  friendshipChange: number;
+  romanceChange: number;
+  message: string;
+};
+
 const DATING_CHARACTERISTICS: DatingCharacteristic[] = [
   "Humour",
   "Goofiness",
@@ -393,7 +401,7 @@ export const applyDatingInteraction = (
   match: DatingProfile,
   mode: "text" | "date",
   accepted: boolean
-): DatingProfile => {
+): DatingInteractionOutcome => {
   const resolvedChemistry =
     match.chemistry ??
     calculateChemistryScore(character, {
@@ -428,42 +436,71 @@ export const applyDatingInteraction = (
   );
   const buildsFriendshipFirst =
     mode === "date" && match.friendshipScore < 15;
+  let friendshipChange = 0;
+  let romanceChange = 0;
 
-  return {
+  if (mode === "text") {
+    if (accepted) {
+      const textOutcomeRoll = randomInt(0, 2);
+
+      if (textOutcomeRoll === 0) {
+        friendshipChange = positiveTextChange;
+      } else if (textOutcomeRoll === 1) {
+        romanceChange = clamp(
+          Math.round(5 + resolvedChemistry / 12 + randomInt(-1, 3)),
+          5,
+          15
+        );
+      } else {
+        friendshipChange = positiveTextChange;
+        romanceChange = clamp(
+          Math.round(5 + compatibility / 14 + randomInt(-1, 3)),
+          5,
+          15
+        );
+      }
+    } else {
+      friendshipChange = -negativeTextChange;
+    }
+  } else if (mode === "date" && buildsFriendshipFirst) {
+    friendshipChange = accepted ? positiveDateChange : -negativeDateChange;
+  } else if (mode === "date") {
+    romanceChange = accepted ? positiveDateChange : -negativeDateChange;
+  }
+
+  const nextMatch = {
     ...match,
     chemistry: resolvedChemistry,
     chemistryUnlocked:
       mode === "date" ? true : match.chemistryUnlocked,
     interacted: true,
-    friendshipScore:
-      mode === "text"
-        ? clamp(
-            match.friendshipScore +
-              (accepted ? positiveTextChange : -negativeTextChange),
-            0,
-            100
-          )
-        : mode === "date" && buildsFriendshipFirst
-          ? clamp(
-              match.friendshipScore +
-                (accepted ? positiveDateChange : -negativeDateChange),
-              0,
-              100
-            )
-          : match.friendshipScore,
-    romanceScore:
-      mode === "date"
-        ? clamp(
-            match.romanceScore +
-              (buildsFriendshipFirst
-                ? 0
-                : accepted
-                  ? positiveDateChange
-                  : -negativeDateChange),
-            0,
-            100
-          )
-        : match.romanceScore,
+    friendshipScore: clamp(match.friendshipScore + friendshipChange, 0, 100),
+    romanceScore: clamp(match.romanceScore + romanceChange, 0, 100),
+  };
+
+  const message =
+    mode === "text"
+      ? !accepted
+        ? "The conversation felt flat."
+        : romanceChange >= 5
+          ? "The conversation went really well."
+          : "The conversation went well."
+      : accepted
+        ? "The date went well."
+        : "The date did not go well.";
+
+  return {
+    accepted,
+    match: nextMatch,
+    friendshipChange: Math.max(
+      Math.min(nextMatch.friendshipScore - match.friendshipScore, 100),
+      -100
+    ),
+    romanceChange: Math.max(
+      Math.min(nextMatch.romanceScore - match.romanceScore, 100),
+      -100
+    ),
+    message,
   };
 };
 

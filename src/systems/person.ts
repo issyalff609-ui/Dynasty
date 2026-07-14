@@ -393,6 +393,7 @@ export const promoteNpcToPerson = (
       maximumAge: Math.max(18, Math.min(90, npc.age + 5)),
       gender: "Both",
     },
+    datingProfileCreated: false,
     datingCandidatePool: {
       year: currentYear,
       profiles: [],

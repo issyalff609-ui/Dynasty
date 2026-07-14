@@ -1,8 +1,10 @@
 import React from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
-import type { DatingDiscoverActionResult } from "../../systems/datingActions";
 import type { DatingProfile } from "../../types/relationships";
-import type { DatingScreenStyles } from "./shared";
+import {
+  DatingBottomNavigation,
+  type DatingScreenStyles,
+} from "./shared";
 
 type DatingDiscoverScreenProps = {
   styles: DatingScreenStyles;
@@ -17,12 +19,11 @@ type DatingDiscoverScreenProps = {
   discoverEngineerViewVisible: boolean;
   datingActionInProgress: boolean;
   datingMatchLimitReached: boolean;
-  datingAppSettingsVisible: boolean;
   onHome: () => void;
-  onToggleSettings: () => void;
-  onSeeMatches: () => void;
-  onUpdatePreferences: () => void;
-  onUpdateProfile: () => void;
+  onDiscover: () => void;
+  onMatches: () => void;
+  onPreferences: () => void;
+  onProfile: () => void;
   onToggleEngineerView: () => void;
   onPass: () => void;
   onLike: () => void;
@@ -42,12 +43,11 @@ export function DatingDiscoverScreen({
   discoverEngineerViewVisible,
   datingActionInProgress,
   datingMatchLimitReached,
-  datingAppSettingsVisible,
   onHome,
-  onToggleSettings,
-  onSeeMatches,
-  onUpdatePreferences,
-  onUpdateProfile,
+  onDiscover,
+  onMatches,
+  onPreferences,
+  onProfile,
   onToggleEngineerView,
   onPass,
   onLike,
@@ -57,9 +57,7 @@ export function DatingDiscoverScreen({
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.discoverHeaderRow}>
-          <Pressable onPress={onToggleSettings} style={styles.headerSideButton}>
-            <Text>Settings</Text>
-          </Pressable>
+          <View style={styles.headerSideButton} />
           <View style={styles.appScreenHeaderTitleWrap}>
             <Text style={styles.screenTitle}>Dating App</Text>
           </View>
@@ -70,20 +68,6 @@ export function DatingDiscoverScreen({
         <Pressable onPress={onHome} style={styles.box}>
           <Text>Home</Text>
         </Pressable>
-
-        {datingAppSettingsVisible ? (
-          <View style={styles.detailBox}>
-            <Pressable onPress={onSeeMatches} style={styles.innerBox}>
-              <Text>See Matches</Text>
-            </Pressable>
-            <Pressable onPress={onUpdatePreferences} style={styles.innerBox}>
-              <Text>Update Preferences</Text>
-            </Pressable>
-            <Pressable onPress={onUpdateProfile} style={styles.innerBox}>
-              <Text>Update Profile</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
         <View style={styles.discoverTitleRow}>
           <View style={styles.detailGroup}>
@@ -161,6 +145,14 @@ export function DatingDiscoverScreen({
         ) : (
           <Text>No more profiles available this year.</Text>
         )}
+        <DatingBottomNavigation
+          styles={styles}
+          currentSection="discover"
+          onDiscover={onDiscover}
+          onMatches={onMatches}
+          onPreferences={onPreferences}
+          onProfile={onProfile}
+        />
       </ScrollView>
     </SafeAreaView>
   );

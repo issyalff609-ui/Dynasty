@@ -169,6 +169,80 @@ export const getCurrentSpouse = (person: Character) =>
     .reverse()
     .find((relationship) => relationship.currentStatus === "Married") ?? null;
 
+export type ExRelationshipSummary = {
+  relationshipId: string;
+  partnerPersonId: string;
+  name: string;
+  finalStatus: "Ex-Partner" | "Ex-Spouse";
+  startYear: number;
+  endYear: number | null;
+  endReason: RomanticRelationshipEndReason;
+  person: Character | null;
+  relationship: RomanticRelationship;
+};
+
+const getExRelationshipFinalStatus = (relationship: RomanticRelationship) =>
+  relationship.marriageYear !== null ? "Ex-Spouse" : "Ex-Partner";
+
+export const getExRelationshipSummaries = (
+  person: Character,
+  allPeople: Character[]
+): ExRelationshipSummary[] => {
+  const activePartnerId = getActiveRomanticRelationship(person)?.personId ?? null;
+  const sortedEndedRelationships = [...person.romanticRelationships]
+    .filter((relationship) => relationship.currentStatus === "Ended")
+    .sort((left, right) => {
+      const leftEndYear = left.endYear ?? -Infinity;
+      const rightEndYear = right.endYear ?? -Infinity;
+
+      if (rightEndYear !== leftEndYear) {
+        return rightEndYear - leftEndYear;
+      }
+
+      return right.startYear - left.startYear;
+    });
+  const seenRelationshipKeys = new Set<string>();
+  const seenPartnerIds = new Set<string>();
+
+  return sortedEndedRelationships.reduce<ExRelationshipSummary[]>(
+    (summaries, relationship) => {
+      if (relationship.personId === activePartnerId) {
+        return summaries;
+      }
+
+      const relationshipKey = `${relationship.id}:${relationship.personId}`;
+      if (seenRelationshipKeys.has(relationshipKey)) {
+        return summaries;
+      }
+      seenRelationshipKeys.add(relationshipKey);
+
+      if (seenPartnerIds.has(relationship.personId)) {
+        return summaries;
+      }
+      seenPartnerIds.add(relationship.personId);
+
+      const otherPerson = getPersonById(allPeople, relationship.personId);
+
+      summaries.push({
+        relationshipId: relationship.id,
+        partnerPersonId: relationship.personId,
+        name: otherPerson
+          ? `${otherPerson.firstName} ${otherPerson.lastName}`
+          : "Unknown Ex",
+        finalStatus: getExRelationshipFinalStatus(relationship),
+        startYear: relationship.startYear,
+        endYear: relationship.endYear,
+        endReason: relationship.endReason,
+        person: otherPerson,
+        relationship,
+      });
+
+      return summaries;
+    },
+    []
+  );
+};
+
 const upsertRomanticRelationship = (
   person: Character,
   relationship: RomanticRelationship
@@ -382,27 +456,27 @@ const rollDateStatChanges = (
   if (tier === "poor") {
     return {
       friendshipChange: randomInt(0, 1),
-      romanceChange: 0,
+      romanceChange: randomInt(5, 8),
     };
   }
 
   if (tier === "okay") {
     return {
       friendshipChange: randomInt(1, 2),
-      romanceChange: 1,
+      romanceChange: randomInt(8, 12),
     };
   }
 
   if (tier === "good") {
     return {
       friendshipChange: randomInt(2, 4),
-      romanceChange: randomInt(1, 3),
+      romanceChange: randomInt(12, 16),
     };
   }
 
   return {
     friendshipChange: randomInt(3, 5),
-    romanceChange: randomInt(2, 4),
+    romanceChange: randomInt(16, 20),
   };
 };
 

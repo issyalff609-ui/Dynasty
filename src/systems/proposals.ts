@@ -1,6 +1,5 @@
 import { createMemory } from "../generators/characterGenerator";
 import {
-  PROPOSAL_IMPRESSIVE_LOCATIONS,
   PROPOSAL_LOCATION_OPTIONS,
   PROPOSAL_LOW_PRESSURE_LOCATIONS,
   PROPOSAL_PREFERENCE_MAPPINGS,
@@ -174,10 +173,23 @@ const getCharacteristicPreferenceScore = (
     preference.stance === "Likes"
       ? 1
       : preference.stance === "Aloof"
-        ? 0.45
+        ? 0
         : -1;
 
   return clamp(score * stanceMultiplier, -1, 1);
+};
+
+const getProposalOutcomeMemorySuffix = (outcome: ProposalOutcome) => {
+  if (outcome === "yes") {
+    return "The partner accepted.";
+  }
+  if (outcome === "not_yet") {
+    return "The partner said they were not ready yet.";
+  }
+  if (outcome === "no") {
+    return "The partner said no.";
+  }
+  return "The proposal led to the relationship ending.";
 };
 
 const buildProposalSpeechTone = ({
@@ -205,9 +217,9 @@ const buildProposalMemoryText = (
     plan.location
   )} with ${getProposalRingLabel(plan.ring)}. The speech was ${buildProposalSpeechTone(
     plan
-  )}. Outcome: ${outcome}.`;
+  )}. ${getProposalOutcomeMemorySuffix(outcome)}`;
 
-const buildProposalDiaryText = (
+const buildProposalDiaryTextForProposer = (
   partnerName: string,
   plan: ProposalPlan,
   outcome: ProposalOutcome
@@ -227,6 +239,28 @@ const buildProposalDiaryText = (
   }
 
   return `${setup} It ended the relationship.`;
+};
+
+const buildProposalDiaryTextForPartner = (
+  proposerName: string,
+  plan: ProposalPlan,
+  outcome: ProposalOutcome
+) => {
+  const setup = `${proposerName} proposed to me at ${getProposalLocationLabel(
+    plan.location
+  )} with ${getProposalRingLabel(plan.ring)}.`;
+
+  if (outcome === "yes") {
+    return `${setup} I said yes.`;
+  }
+  if (outcome === "not_yet") {
+    return `${setup} I said I was not ready yet.`;
+  }
+  if (outcome === "no") {
+    return `${setup} I said no.`;
+  }
+
+  return `${setup} I ended the relationship after the proposal.`;
 };
 
 const createProposalMemory = (
@@ -249,7 +283,7 @@ const createProposalMemory = (
 
 const appendProposalRecord = (person: Character, proposal: ProposalRecord) => ({
   ...person,
-  proposalHistory: [proposal, ...person.proposalHistory],
+  proposalHistory: [proposal, ...(person.proposalHistory ?? [])],
 });
 
 const appendProposalMemory = (
@@ -275,6 +309,35 @@ export const calculateBaseProposalScore = ({
   compatibility: number;
 }) =>
   romance * 0.45 + friendship * 0.3 + compatibility * 0.25;
+
+const getStoredProposalCompatibility = (person: Character) => {
+  const partnerProfile = person.partner as (Character["partner"] & {
+    compatibility?: unknown;
+  }) | null;
+
+  return typeof partnerProfile?.compatibility === "number"
+    ? partnerProfile.compatibility
+    : null;
+};
+
+export const getProposalCompatibilityScore = ({
+  person,
+  otherPerson,
+}: {
+  person: Character;
+  otherPerson: Character;
+}) => {
+  const storedCompatibility = getStoredProposalCompatibility(otherPerson);
+  if (storedCompatibility !== null) {
+    return storedCompatibility;
+  }
+
+  return getCompatibilityScore(otherPerson, {
+    traits: person.traits,
+    job: person.job,
+    degree: person.degree,
+  });
+};
 
 export const getProposalPreferenceModifier = ({
   characteristics,
@@ -370,10 +433,9 @@ export const resolveProposalToPartner = ({
     };
   }
 
-  const compatibility = getCompatibilityScore(person, {
-    traits: person.partner.traits,
-    job: person.partner.job,
-    degree: person.partner.degree,
+  const compatibility = getProposalCompatibilityScore({
+    person,
+    otherPerson,
   });
   const baseProposalScore = calculateBaseProposalScore({
     romance: person.partner.romanceScore,
@@ -433,7 +495,17 @@ export const resolveProposalToPartner = ({
     const withDiary = addDiaryEntryIfMissing(
       withRecord,
       currentYear,
-      buildProposalDiaryText(otherPerson.firstName, plan, outcome),
+      buildProposalDiaryTextForProposer(otherPerson.firstName, plan, outcome),
+      "relationship"
+    );
+    const otherPersonWithRecord = appendProposalRecord(
+      appendProposalMemory(engagedOtherPerson, proposalMemory),
+      proposal
+    );
+    const otherPersonWithDiary = addDiaryEntryIfMissing(
+      otherPersonWithRecord,
+      currentYear,
+      buildProposalDiaryTextForPartner(person.firstName, plan, outcome),
       "relationship"
     );
 
@@ -443,10 +515,7 @@ export const resolveProposalToPartner = ({
         ...withDiary,
         partner: updatedPartnerProfile ?? withDiary.partner,
       },
-      otherPerson: appendProposalRecord(
-        appendProposalMemory(engagedOtherPerson, proposalMemory),
-        proposal
-      ),
+      otherPerson: otherPersonWithDiary,
       result: {
         outcome,
         proposal,
@@ -476,14 +545,11 @@ export const resolveProposalToPartner = ({
         proposal
       ),
       currentYear,
-      buildProposalDiaryText(otherPerson.firstName, plan, outcome),
+      buildProposalDiaryTextForProposer(otherPerson.firstName, plan, outcome),
       "relationship"
     );
-
-    return {
-      success: true,
-      person: endedPerson,
-      otherPerson: appendProposalRecord(
+    const endedOtherPerson = addDiaryEntryIfMissing(
+      appendProposalRecord(
         appendProposalMemory(
           {
             ...breakup.otherPerson,
@@ -493,6 +559,15 @@ export const resolveProposalToPartner = ({
         ),
         proposal
       ),
+      currentYear,
+      buildProposalDiaryTextForPartner(person.firstName, plan, outcome),
+      "relationship"
+    );
+
+    return {
+      success: true,
+      person: endedPerson,
+      otherPerson: endedOtherPerson,
       result: {
         outcome,
         proposal,
@@ -507,17 +582,24 @@ export const resolveProposalToPartner = ({
   const withDiary = addDiaryEntryIfMissing(
     withRecord,
     currentYear,
-    buildProposalDiaryText(otherPerson.firstName, plan, outcome),
+    buildProposalDiaryTextForProposer(otherPerson.firstName, plan, outcome),
+    "relationship"
+  );
+  const otherPersonWithRecord = appendProposalRecord(
+    appendProposalMemory(otherPerson, proposalMemory),
+    proposal
+  );
+  const otherPersonWithDiary = addDiaryEntryIfMissing(
+    otherPersonWithRecord,
+    currentYear,
+    buildProposalDiaryTextForPartner(person.firstName, plan, outcome),
     "relationship"
   );
 
   return {
     success: true,
     person: withDiary,
-    otherPerson: appendProposalRecord(
-      appendProposalMemory(otherPerson, proposalMemory),
-      proposal
-    ),
+    otherPerson: otherPersonWithDiary,
     result: {
       outcome,
       proposal,

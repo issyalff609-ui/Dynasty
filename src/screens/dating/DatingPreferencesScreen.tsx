@@ -2,7 +2,7 @@ import React from "react";
 import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import type { DatingAgeFilter } from "../../data/dating";
 import type { Preference } from "../../types/person";
-import type { DatingScreenStyles } from "./shared";
+import { DatingBottomNavigation, type DatingScreenStyles } from "./shared";
 
 type DatingPreferencesScreenProps = {
   styles: DatingScreenStyles;
@@ -10,6 +10,7 @@ type DatingPreferencesScreenProps = {
   resolvedDatingAgeFilter: DatingAgeFilter;
   maximumAgeLabel: string;
   resolvedDatingGenderFilter: Preference;
+  isSetupFlow: boolean;
   onBack: () => void;
   onClose: () => void;
   onHome: () => void;
@@ -18,7 +19,11 @@ type DatingPreferencesScreenProps = {
   onDecreaseMaximumAge: () => void;
   onIncreaseMaximumAge: () => void;
   onSelectGender: (gender: Preference) => void;
-  onCreateProfile: () => void;
+  onConfirm: () => void;
+  onDiscover: () => void;
+  onMatches: () => void;
+  onPreferences: () => void;
+  onProfile: () => void;
 };
 
 export function DatingPreferencesScreen({
@@ -27,6 +32,7 @@ export function DatingPreferencesScreen({
   resolvedDatingAgeFilter,
   maximumAgeLabel,
   resolvedDatingGenderFilter,
+  isSetupFlow,
   onBack,
   onClose,
   onHome,
@@ -35,7 +41,11 @@ export function DatingPreferencesScreen({
   onDecreaseMaximumAge,
   onIncreaseMaximumAge,
   onSelectGender,
-  onCreateProfile,
+  onConfirm,
+  onDiscover,
+  onMatches,
+  onPreferences,
+  onProfile,
 }: DatingPreferencesScreenProps) {
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -55,13 +65,15 @@ export function DatingPreferencesScreen({
           <Text>Home</Text>
         </Pressable>
 
-        <View style={styles.progressRow}>
-          <Text>Profile</Text>
-          <View style={styles.progressLine} />
-          <Text style={styles.progressStepActive}>Preferences</Text>
-          <View style={styles.progressLine} />
-          <Text>Matches</Text>
-        </View>
+        {isSetupFlow ? (
+          <View style={styles.progressRow}>
+            <Text>Profile</Text>
+            <View style={styles.progressLine} />
+            <Text style={styles.progressStepActive}>Preferences</Text>
+            <View style={styles.progressLine} />
+            <Text>Discover</Text>
+          </View>
+        ) : null}
 
         <Text style={styles.sectionTitle}>Preferences</Text>
         <Text>{introText}</Text>
@@ -133,9 +145,19 @@ export function DatingPreferencesScreen({
           </View>
         </View>
 
-        <Pressable onPress={onCreateProfile} style={styles.box}>
-          <Text>Create Profile</Text>
+        <Pressable onPress={onConfirm} style={styles.box}>
+          <Text>{isSetupFlow ? "Create Profile" : "Save Preferences"}</Text>
         </Pressable>
+        {!isSetupFlow ? (
+          <DatingBottomNavigation
+            styles={styles}
+            currentSection="preferences"
+            onDiscover={onDiscover}
+            onMatches={onMatches}
+            onPreferences={onPreferences}
+            onProfile={onProfile}
+          />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
