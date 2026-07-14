@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -13,9 +14,11 @@ import { PersonCard } from "./src/components/PersonCard";
 import { SectionCard } from "./src/components/SectionCard";
 import { StatBar } from "./src/components/StatBar";
 import {
-  DATING_AGE_RANGES,
+  MAXIMUM_DATING_AGE,
+  MINIMUM_DATING_AGE,
   PARTNER_DATE_ACTIVITIES,
-  type DatingAgeRange,
+  getDefaultDatingAgeFilter,
+  type DatingAgeFilter,
 } from "./src/data/dating";
 import { CareerPanel } from "./src/screens/CareerPanel";
 import { EducationPanel } from "./src/screens/EducationPanel";
@@ -206,8 +209,207 @@ const labelList = (items: string[]) => items.join(", ");
 
 const scoreText = (label: string, value: number) => `${label}: ${value}/100`;
 
+const formatDatingAgeLabel = (age: number) =>
+  age >= MAXIMUM_DATING_AGE ? `${MAXIMUM_DATING_AGE}+` : `${age}`;
+
+type AppScreen =
+  | "home"
+  | "romance"
+  | "datingApp"
+  | "datingAppPreferences"
+  | "datingAppMatches";
+
+type AgeRangeSliderProps = {
+  minimumAge: number;
+  maximumAge: number;
+  onChange: (minimumAge: number, maximumAge: number) => void;
+};
+
+function AgeRangeSlider({
+  minimumAge,
+  maximumAge,
+  onChange,
+}: AgeRangeSliderProps) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const minimumStartPositionRef = useRef(0);
+  const maximumStartPositionRef = useRef(0);
+  const activeTrackHandleRef = useRef<"minimum" | "maximum" | null>(null);
+
+  const clampPosition = (position: number) =>
+    Math.max(0, Math.min(position, trackWidth));
+
+  const positionToAge = (position: number) => {
+    if (trackWidth <= 0) {
+      return minimumAge;
+    }
+
+    const clampedPosition = clampPosition(position);
+    return (
+      MINIMUM_DATING_AGE +
+      Math.round(
+        (clampedPosition / trackWidth) *
+          (MAXIMUM_DATING_AGE - MINIMUM_DATING_AGE)
+      )
+    );
+  };
+
+  const ageToPosition = (age: number) => {
+    if (trackWidth <= 0) {
+      return 0;
+    }
+
+    return (
+      ((age - MINIMUM_DATING_AGE) /
+        (MAXIMUM_DATING_AGE - MINIMUM_DATING_AGE)) *
+      trackWidth
+    );
+  };
+
+  const updateMinimumFromPosition = (position: number) => {
+    const nextAge = positionToAge(position);
+    onChange(Math.min(nextAge, maximumAge), maximumAge);
+  };
+
+  const updateMaximumFromPosition = (position: number) => {
+    const nextAge = positionToAge(position);
+    onChange(minimumAge, Math.max(nextAge, minimumAge));
+  };
+
+  const minimumPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => trackWidth > 0,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        minimumStartPositionRef.current = ageToPosition(minimumAge);
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        updateMinimumFromPosition(
+          minimumStartPositionRef.current + gestureState.dx
+        );
+      },
+    })
+  ).current;
+
+  const maximumPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => trackWidth > 0,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        maximumStartPositionRef.current = ageToPosition(maximumAge);
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        updateMaximumFromPosition(
+          maximumStartPositionRef.current + gestureState.dx
+        );
+      },
+    })
+  ).current;
+
+  const trackPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => trackWidth > 0,
+      onMoveShouldSetPanResponder: () => trackWidth > 0,
+      onPanResponderGrant: (event) => {
+        const touchPosition = clampPosition(event.nativeEvent.locationX);
+        const minimumPosition = ageToPosition(minimumAge);
+        const maximumPosition = ageToPosition(maximumAge);
+        const minimumDistance = Math.abs(touchPosition - minimumPosition);
+        const maximumDistance = Math.abs(touchPosition - maximumPosition);
+
+        activeTrackHandleRef.current =
+          minimumDistance <= maximumDistance ? "minimum" : "maximum";
+        minimumStartPositionRef.current = minimumPosition;
+        maximumStartPositionRef.current = maximumPosition;
+
+        if (activeTrackHandleRef.current === "minimum") {
+          updateMinimumFromPosition(touchPosition);
+          minimumStartPositionRef.current = touchPosition;
+          return;
+        }
+
+        updateMaximumFromPosition(touchPosition);
+        maximumStartPositionRef.current = touchPosition;
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        if (activeTrackHandleRef.current === "minimum") {
+          updateMinimumFromPosition(
+            minimumStartPositionRef.current + gestureState.dx
+          );
+          return;
+        }
+
+        if (activeTrackHandleRef.current === "maximum") {
+          updateMaximumFromPosition(
+            maximumStartPositionRef.current + gestureState.dx
+          );
+        }
+      },
+      onPanResponderRelease: () => {
+        activeTrackHandleRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        activeTrackHandleRef.current = null;
+      },
+    })
+  ).current;
+
+  const minimumPosition = ageToPosition(minimumAge);
+  const maximumPosition = ageToPosition(maximumAge);
+
+  return (
+    <View style={styles.sliderContainer}>
+      <View style={styles.sliderValueRow}>
+        <Text>{minimumAge}</Text>
+        <Text>{formatDatingAgeLabel(maximumAge)}</Text>
+      </View>
+
+      <View
+        {...trackPanResponder.panHandlers}
+        onLayout={(event) => {
+          setTrackWidth(event.nativeEvent.layout.width);
+        }}
+        style={styles.sliderTrack}
+      >
+        <View
+          style={[
+            styles.sliderActiveTrack,
+            {
+              left: minimumPosition,
+              width: Math.max(maximumPosition - minimumPosition, 0),
+            },
+          ]}
+        />
+
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.sliderTouchTarget,
+            styles.sliderTouchTargetMinimum,
+            { left: minimumPosition - 24 },
+          ]}
+          {...minimumPanResponder.panHandlers}
+        >
+          <View style={styles.sliderHandle} />
+        </View>
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.sliderTouchTarget,
+            styles.sliderTouchTargetMaximum,
+            { left: maximumPosition - 24 },
+          ]}
+          {...maximumPanResponder.panHandlers}
+        >
+          <View style={styles.sliderHandle} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
 export default function App() {
   const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
+  const datingAgeFilterCharacterIdRef = useRef<string | null>(null);
   if (initialLoadRef.current === null) {
     initialLoadRef.current = loadOrCreateHousehold(buildHousehold);
   }
@@ -228,13 +430,14 @@ export default function App() {
   const [selectedClassmateId, setSelectedClassmateId] = useState<string | null>(null);
   const [financesVisible, setFinancesVisible] = useState(false);
   const [jobsVisible, setJobsVisible] = useState(false);
-  const [romanceVisible, setRomanceVisible] = useState(false);
+  const [currentScreen, setCurrentScreen] = useState<AppScreen>("home");
+  const [romanceTwoVisible, setRomanceTwoVisible] = useState(false);
   const [friendsVisible, setFriendsVisible] = useState(false);
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
   const [datingAppVisible, setDatingAppVisible] = useState(false);
   const [partnerVisible, setPartnerVisible] = useState(false);
   const [selectedDatingMatchId, setSelectedDatingMatchId] = useState<string | null>(null);
-  const [datingAgeFilter, setDatingAgeFilter] = useState<DatingAgeRange>("No age range");
+  const [datingAgeFilter, setDatingAgeFilter] = useState<DatingAgeFilter | null>(null);
   const [datingGenderFilter, setDatingGenderFilter] = useState<Preference>("Both");
   const [datingScoreInfoVisible, setDatingScoreInfoVisible] = useState(false);
   const [datingMatchesVisible, setDatingMatchesVisible] = useState(false);
@@ -375,9 +578,29 @@ export default function App() {
         household.reputation
       )
     : null;
+  const resolvedDatingAgeFilter = useMemo(
+    () => datingAgeFilter ?? getDefaultDatingAgeFilter(currentCharacterAge),
+    [currentCharacterAge, datingAgeFilter]
+  );
+  const currentDatingAgeFilterLabel = useMemo(
+    () =>
+      `${resolvedDatingAgeFilter.minimumAge}-${formatDatingAgeLabel(
+        resolvedDatingAgeFilter.maximumAge
+      )}`,
+    [resolvedDatingAgeFilter]
+  );
   useEffect(() => {
     setDatingGenderFilter(currentCharacter.genderPreference);
   }, [currentCharacter.id, currentCharacter.genderPreference]);
+
+  useEffect(() => {
+    if (datingAgeFilterCharacterIdRef.current === currentCharacter.id) {
+      return;
+    }
+
+    datingAgeFilterCharacterIdRef.current = currentCharacter.id;
+    setDatingAgeFilter(getDefaultDatingAgeFilter(currentCharacterAge));
+  }, [currentCharacter.id, currentCharacterAge]);
 
   useEffect(() => {
     if (!currentDatingProfile) {
@@ -441,6 +664,24 @@ export default function App() {
     () => [...currentCharacter.diary].reverse(),
     [currentCharacter.diary]
   );
+  const currentDatingAppOccupation = useMemo(() => {
+    if (currentCharacter.job && currentCharacter.job !== "No job") {
+      return currentCharacter.job;
+    }
+
+    if (
+      currentCharacter.universityYearsRemaining > 0 &&
+      currentCharacter.degree !== null
+    ) {
+      return "Studying";
+    }
+
+    return "No Job";
+  }, [
+    currentCharacter.degree,
+    currentCharacter.job,
+    currentCharacter.universityYearsRemaining,
+  ]);
   const dateCategoryRanges = useMemo(() => {
     const buildRange = (category: PartnerDateCategory) => {
       const matchingActivities = PARTNER_DATE_ACTIVITIES.filter(
@@ -476,7 +717,7 @@ export default function App() {
     setSelectedClassmateId(null);
     setFinancesVisible(false);
     setJobsVisible(false);
-    setRomanceVisible(false);
+    setRomanceTwoVisible(false);
     setFriendsVisible(false);
     setSelectedFriendId(null);
     setDatingAppVisible(false);
@@ -828,6 +1069,269 @@ export default function App() {
               </View>
             </>
           ) : null}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "romance") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.screenHeader}>
+            <Pressable
+              onPress={() => {
+                closeAllPanels();
+                setCurrentScreen("home");
+              }}
+              style={styles.headerBackButton}
+            >
+              <Text>Back</Text>
+            </Pressable>
+            <Text style={styles.screenTitle}>Romance</Text>
+          </View>
+
+          <Pressable
+            onPress={() => setCurrentScreen("datingApp")}
+            style={styles.box}
+          >
+            <Text>Dating App</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => Alert.alert("Night Out", "Coming soon")}
+            style={styles.box}
+          >
+            <Text>Night Out</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "datingApp") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.appScreenHeader}>
+            <Pressable
+              onPress={() => setCurrentScreen("romance")}
+              style={styles.headerSideButton}
+            >
+              <Text>{"<"}</Text>
+            </Pressable>
+            <View style={styles.appScreenHeaderTitleWrap}>
+              <Text style={styles.screenTitle}>Dating App</Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                closeAllPanels();
+                setCurrentScreen("home");
+              }}
+              style={styles.headerSideButton}
+            >
+              <Text>X</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.progressRow}>
+            <Text style={styles.progressStepActive}>Profile</Text>
+            <View style={styles.progressLine} />
+            <Text>Preferences</Text>
+            <View style={styles.progressLine} />
+            <Text>Matches</Text>
+          </View>
+
+          <Text style={styles.sectionTitle}>Set Up Dating Profile</Text>
+
+          <View style={styles.profileIconBox}>
+            <View style={styles.profileIconHead} />
+            <View style={styles.profileIconBody} />
+          </View>
+
+          <View style={styles.readOnlyFieldGroup}>
+            <View style={styles.readOnlyFieldRow}>
+              <Text>Name</Text>
+              <Text>{currentCharacter.firstName}</Text>
+            </View>
+            <View style={styles.readOnlyFieldRow}>
+              <Text>Age</Text>
+              <Text>{currentCharacterAge}</Text>
+            </View>
+            <View style={styles.readOnlyFieldRow}>
+              <Text>Occupation</Text>
+              <Text>{currentDatingAppOccupation}</Text>
+            </View>
+            <View style={styles.readOnlyFieldRowLast}>
+              <Text>Location</Text>
+              <Text>{household.country}</Text>
+            </View>
+          </View>
+
+          <Pressable
+            onPress={() => setCurrentScreen("datingAppPreferences")}
+            style={styles.box}
+          >
+            <Text>Next: Preferences</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "datingAppPreferences") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.appScreenHeader}>
+            <Pressable
+              onPress={() => setCurrentScreen("datingApp")}
+              style={styles.headerSideButton}
+            >
+              <Text>{"<"}</Text>
+            </Pressable>
+            <View style={styles.appScreenHeaderTitleWrap}>
+              <Text style={styles.screenTitle}>Dating App</Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                closeAllPanels();
+                setCurrentScreen("home");
+              }}
+              style={styles.headerSideButton}
+            >
+              <Text>X</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.progressRow}>
+            <Text>Profile</Text>
+            <View style={styles.progressLine} />
+            <Text style={styles.progressStepActive}>Preferences</Text>
+            <View style={styles.progressLine} />
+            <Text>Matches</Text>
+          </View>
+
+          <Text style={styles.sectionTitle}>Preferences</Text>
+          <Text>Who are you looking for?</Text>
+
+          <View style={styles.detailGroup}>
+            <Text style={styles.fieldSectionTitle}>Age Range</Text>
+            <AgeRangeSlider
+              minimumAge={resolvedDatingAgeFilter.minimumAge}
+              maximumAge={resolvedDatingAgeFilter.maximumAge}
+              onChange={(minimumAge, maximumAge) =>
+                setDatingAgeFilter({ minimumAge, maximumAge })
+              }
+            />
+          </View>
+
+          <View style={styles.detailGroup}>
+            <Text style={styles.fieldSectionTitle}>Gender</Text>
+            <View style={styles.genderOptionRow}>
+              <Pressable
+                onPress={() => setDatingGenderFilter("Female")}
+                style={styles.genderOption}
+              >
+                <Text
+                  style={
+                    datingGenderFilter === "Female"
+                      ? styles.progressStepActive
+                      : undefined
+                  }
+                >
+                  Women
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setDatingGenderFilter("Male")}
+                style={styles.genderOption}
+              >
+                <Text
+                  style={
+                    datingGenderFilter === "Male"
+                      ? styles.progressStepActive
+                      : undefined
+                  }
+                >
+                  Men
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setDatingGenderFilter("Both")}
+                style={styles.genderOption}
+              >
+                <Text
+                  style={
+                    datingGenderFilter === "Both"
+                      ? styles.progressStepActive
+                      : undefined
+                  }
+                >
+                  Both
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <Pressable
+            onPress={() => {
+              setHousehold((currentHousehold) => ({
+                ...currentHousehold,
+                characters: currentHousehold.characters.map((character) =>
+                  character.id === currentHousehold.currentCharacterId
+                    ? {
+                        ...character,
+                        genderPreference: datingGenderFilter,
+                      }
+                    : character
+                ),
+              }));
+              setCurrentScreen("datingAppMatches");
+            }}
+            style={styles.box}
+          >
+            <Text>Create Profile</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "datingAppMatches") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.appScreenHeader}>
+            <Pressable
+              onPress={() => setCurrentScreen("datingAppPreferences")}
+              style={styles.headerSideButton}
+            >
+              <Text>{"<"}</Text>
+            </Pressable>
+            <View style={styles.appScreenHeaderTitleWrap}>
+              <Text style={styles.screenTitle}>Dating App</Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                closeAllPanels();
+                setCurrentScreen("home");
+              }}
+              style={styles.headerSideButton}
+            >
+              <Text>X</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.progressRow}>
+            <Text>Profile</Text>
+            <View style={styles.progressLine} />
+            <Text>Preferences</Text>
+            <View style={styles.progressLine} />
+            <Text style={styles.progressStepActive}>Matches</Text>
+          </View>
+
+          <Text style={styles.sectionTitle}>Matches</Text>
         </ScrollView>
       </SafeAreaView>
     );
@@ -1292,7 +1796,7 @@ export default function App() {
             : generateDatingProfiles(
                 character,
                 household.country,
-                datingAgeFilter,
+                resolvedDatingAgeFilter,
                 datingGenderFilter,
                 [],
                 createCharacter,
@@ -1315,7 +1819,7 @@ export default function App() {
         datingProfiles: generateDatingProfiles(
           character,
           household.country,
-          datingAgeFilter,
+          resolvedDatingAgeFilter,
           datingGenderFilter,
           [],
           createCharacter,
@@ -2053,13 +2557,23 @@ export default function App() {
         ) : null}
 
         <Pressable
-          onPress={() => toggleTopLevelPanel(romanceVisible, setRomanceVisible)}
+          onPress={() => {
+            closeAllPanels();
+            setCurrentScreen("romance");
+          }}
           style={styles.box}
         >
           <Text>Romance</Text>
         </Pressable>
 
-        {romanceVisible ? (
+        <Pressable
+          onPress={() => toggleTopLevelPanel(romanceTwoVisible, setRomanceTwoVisible)}
+          style={styles.box}
+        >
+          <Text>Romance 2</Text>
+        </Pressable>
+
+        {romanceTwoVisible ? (
           <View style={styles.box}>
             <Pressable
               style={styles.innerBox}
@@ -2229,7 +2743,7 @@ export default function App() {
                           onPress={() => showWipAlert("Move in Together")}
                           style={styles.innerBox}
                         >
-                          <Text>Move in Together — WIP</Text>
+                          <Text>Move in Together - WIP</Text>
                         </Pressable>
                         {isDatingPartner ? (
                           <Pressable
@@ -2243,13 +2757,13 @@ export default function App() {
                           onPress={() => showWipAlert("Try for a Baby")}
                           style={styles.innerBox}
                         >
-                          <Text>Try for a Baby — WIP</Text>
+                          <Text>Try for a Baby - WIP</Text>
                         </Pressable>
                         <Pressable
                           onPress={() => showWipAlert("Purchase a Property Together")}
                           style={styles.innerBox}
                         >
-                          <Text>Purchase a Property Together — WIP</Text>
+                          <Text>Purchase a Property Together - WIP</Text>
                         </Pressable>
                         {isEngagedWithPartner ? (
                           <>
@@ -2257,13 +2771,13 @@ export default function App() {
                               onPress={() => showWipAlert("Plan Wedding")}
                               style={styles.innerBox}
                             >
-                              <Text>Plan Wedding — WIP</Text>
+                              <Text>Plan Wedding - WIP</Text>
                             </Pressable>
                             <Pressable
                               onPress={() => showWipAlert("Elope")}
                               style={styles.innerBox}
                             >
-                              <Text>Elope — WIP</Text>
+                              <Text>Elope - WIP</Text>
                             </Pressable>
                           </>
                         ) : null}
@@ -2310,7 +2824,7 @@ export default function App() {
                           onPress={() => showWipAlert("Ask them to Move Out")}
                           style={styles.innerBox}
                         >
-                          <Text>Ask them to Move Out — WIP</Text>
+                          <Text>Ask them to Move Out - WIP</Text>
                         </Pressable>
                         <Pressable
                           onPress={bickerWithCurrentPartner}
@@ -2386,29 +2900,12 @@ export default function App() {
                     Dating score uses appearance, reputation, high income, and traits.
                   </Text>
                 ) : null}
-                <Pressable
-                  onPress={() =>
-                    setDatingGenderFilter((current) =>
-                      cyclePreference(current, ["Both", "Male", "Female"])
-                    )
-                  }
-                  style={styles.innerBox}
-                >
+                <View style={styles.innerBox}>
                   <Text>{`Looking For Gender: ${datingGenderFilter}`}</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() =>
-                    setDatingAgeFilter((current) => {
-                      const index = DATING_AGE_RANGES.indexOf(current);
-                      return DATING_AGE_RANGES[
-                        (index + 1) % DATING_AGE_RANGES.length
-                      ];
-                    })
-                  }
-                  style={styles.innerBox}
-                >
-                  <Text>{`Looking For Age: ${datingAgeFilter}`}</Text>
-                </Pressable>
+                </View>
+                <View style={styles.innerBox}>
+                  <Text>{`Looking For Age: ${currentDatingAgeFilterLabel}`}</Text>
+                </View>
                 <Pressable onPress={startSwiping} style={styles.innerBox}>
                   <Text>Start Swiping</Text>
                 </Pressable>
@@ -2557,7 +3054,7 @@ export default function App() {
               </View>
             ) : null}
             <Pressable
-              onPress={() => setRomanceVisible(false)}
+              onPress={() => setRomanceTwoVisible(false)}
               style={styles.innerBox}
             >
               <Text>Close</Text>
@@ -3015,6 +3512,152 @@ const styles = StyleSheet.create({
   engineeringHeader: {
     alignSelf: "stretch",
     gap: 8,
+  },
+  screenHeader: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  headerBackButton: {
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  appScreenHeader: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerSideButton: {
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minWidth: 72,
+    alignItems: "center",
+  },
+  appScreenHeaderTitleWrap: {
+    flex: 1,
+    alignItems: "center",
+  },
+  screenTitle: {
+    fontSize: 24,
+    fontWeight: "600",
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    alignSelf: "stretch",
+  },
+  progressLine: {
+    flex: 1,
+    borderBottomWidth: 1,
+  },
+  progressStepActive: {
+    fontWeight: "700",
+  },
+  sectionTitle: {
+    fontSize: 22,
+    fontWeight: "600",
+  },
+  fieldSectionTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  profileIconBox: {
+    alignSelf: "center",
+    width: 120,
+    height: 140,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  profileIconHead: {
+    width: 44,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 22,
+  },
+  profileIconBody: {
+    width: 80,
+    height: 52,
+    borderWidth: 1,
+    borderTopLeftRadius: 40,
+    borderTopRightRadius: 40,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+  },
+  readOnlyFieldGroup: {
+    borderWidth: 1,
+    alignSelf: "stretch",
+  },
+  readOnlyFieldRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+    borderBottomWidth: 1,
+  },
+  readOnlyFieldRowLast: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+  },
+  sliderContainer: {
+    alignSelf: "stretch",
+    gap: 12,
+  },
+  sliderValueRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  sliderTrack: {
+    alignSelf: "stretch",
+    height: 24,
+    borderWidth: 1,
+    justifyContent: "center",
+    position: "relative",
+    overflow: "visible",
+  },
+  sliderActiveTrack: {
+    position: "absolute",
+    top: 8,
+    height: 8,
+    backgroundColor: "#111111",
+    pointerEvents: "none",
+  },
+  sliderTouchTarget: {
+    position: "absolute",
+    top: -12,
+    width: 48,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sliderTouchTargetMinimum: {
+    zIndex: 3,
+  },
+  sliderTouchTargetMaximum: {
+    zIndex: 4,
+  },
+  sliderHandle: {
+    width: 24,
+    height: 24,
+    borderWidth: 1,
+    backgroundColor: "#ffffff",
+  },
+  genderOptionRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignSelf: "stretch",
+  },
+  genderOption: {
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   engineeringTitle: {
     fontSize: 24,

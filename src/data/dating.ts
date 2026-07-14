@@ -12,6 +12,19 @@ export const DATING_AGE_RANGES = [
 
 export type DatingAgeRange = (typeof DATING_AGE_RANGES)[number];
 
+export type DatingAgeFilter = {
+  minimumAge: number;
+  maximumAge: number;
+};
+
+export const MINIMUM_DATING_AGE = 18;
+export const MAXIMUM_DATING_AGE = 90;
+
+export const getDefaultDatingAgeFilter = (playerAge: number): DatingAgeFilter => ({
+  minimumAge: Math.max(MINIMUM_DATING_AGE, playerAge - 5),
+  maximumAge: Math.max(MINIMUM_DATING_AGE, Math.min(MAXIMUM_DATING_AGE, playerAge + 5)),
+});
+
 import type { PartnerDateActivity } from "../types/relationships";
 
 export const MOVIE_TITLES = [

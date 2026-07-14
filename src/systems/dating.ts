@@ -1,4 +1,4 @@
-import { DATING_AGE_RANGES, type DatingAgeRange } from "../data/dating";
+import { type DatingAgeFilter, type DatingAgeRange } from "../data/dating";
 import { FIRST_NAMES_BY_NAME_POOL, LAST_NAMES_BY_NAME_POOL } from "../data/names";
 import { TRAITS } from "../data/traits";
 import type {
@@ -471,7 +471,7 @@ type CreateCharacter = (
 export const generateDatingProfiles = (
   player: Character,
   householdCountry: Country,
-  ageRange: DatingAgeRange,
+  ageFilter: DatingAgeFilter,
   genderFilter: Preference,
   existingProfiles: DatingProfile[],
   createCharacter: CreateCharacter,
@@ -480,10 +480,11 @@ export const generateDatingProfiles = (
   currentYear: number
 ): DatingProfile[] => {
   const existingIds = new Set(existingProfiles.map((match) => match.id));
-  const [minAge, maxAge] =
-    ageRange === DATING_AGE_RANGES[0]
-      ? [Math.max(18, player.age - 5), Math.max(18, player.age + 5)]
-      : getAgeRangeBounds(ageRange);
+  const minAge = Math.max(18, Math.min(ageFilter.minimumAge, ageFilter.maximumAge));
+  const maxAge = Math.max(
+    minAge,
+    Math.min(ageFilter.maximumAge, 90)
+  );
   const preferredGenderPool =
     genderFilter === "Both"
       ? (["Male", "Female"] as Gender[])
