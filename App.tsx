@@ -226,7 +226,13 @@ const isDatingProfileEligible = (
 ) =>
   profile.age >= ageFilter.minimumAge &&
   profile.age <= ageFilter.maximumAge &&
-  (genderFilter === "Both" || profile.gender === genderFilter);
+  matchesGenderPreference(profile.gender, genderFilter);
+
+const matchesGenderPreference = (
+  profileGender: DatingProfile["gender"],
+  preference: Preference
+) =>
+  preference === "Both" || profileGender === preference;
 
 export default function App() {
   const initialLoadRef = useRef<ReturnType<typeof loadOrCreateHousehold> | null>(null);
@@ -561,18 +567,40 @@ export default function App() {
 
   const openDatingDiscover = () => {
     setCurrentScreen("datingAppDiscover");
-    setHousehold((currentHousehold) => ({
-      ...currentHousehold,
-      characters: currentHousehold.characters.map((character) =>
-        character.id === currentHousehold.currentCharacterId
-          ? {
-              ...character,
-              genderPreference: datingGenderFilter,
-            }
-          : character
-      ),
-    }));
-    ensureDatingProfilesForCurrentPreferences();
+    setHousehold((currentHousehold) => {
+      const currentCharacter = getCurrentHouseholdCharacter(currentHousehold);
+      const eligibleProfiles = currentCharacter.datingProfiles.filter((profile) =>
+        isDatingProfileEligible(profile, resolvedDatingAgeFilter, datingGenderFilter)
+      );
+
+      const updatedCharacter: Character = {
+        ...currentCharacter,
+        genderPreference: datingGenderFilter,
+        datingProfiles:
+          eligibleProfiles.length > 0
+            ? eligibleProfiles
+            : generateDatingProfiles(
+                currentCharacter,
+                currentHousehold.country,
+                resolvedDatingAgeFilter,
+                datingGenderFilter,
+                [],
+                createCharacter,
+                assignJobToCharacter,
+                pickDegreeForJob,
+                currentHousehold.currentYear
+              ),
+      };
+
+      return {
+        ...currentHousehold,
+        characters: currentHousehold.characters.map((character) =>
+          character.id === currentHousehold.currentCharacterId
+            ? updatedCharacter
+            : character
+        ),
+      };
+    });
     setDatingAppSettingsVisible(false);
     setDatingEngineerViewVisible(false);
     setDatingMatchesVisible(false);
