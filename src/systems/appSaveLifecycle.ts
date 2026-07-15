@@ -1,7 +1,7 @@
 import type { Household } from "../types/household";
 import {
-  getEmptyManualLifeSaveSlots,
   getManualLifeSaves,
+  logSaveStorageDiagnosticsInDev,
   loadOrCreateHousehold,
   saveHouseholdToStorage,
   type LoadHouseholdResult,
@@ -9,12 +9,19 @@ import {
   type SaveHouseholdToStorageResult,
 } from "./saveSystem";
 
-export type InitialAppLoadState = {
-  household: Household;
-  manualLifeSlots: ManualLifeSaveSlot[];
-  notices: string[];
-  loadResult: LoadHouseholdResult;
-};
+export type InitialAppLoadState =
+  | {
+      success: true;
+      household: Household;
+      manualLifeSlots: ManualLifeSaveSlot[];
+      notices: string[];
+      loadResult: Extract<LoadHouseholdResult, { success: true }>;
+    }
+  | {
+      success: false;
+      reason: "storage-unavailable";
+      error: string;
+    };
 
 export type AutosaveAttemptResult =
   | {
@@ -33,19 +40,35 @@ export const loadInitialAppState = async (
     getManualLifeSaves(),
   ]);
 
+  if (!loadResult.success) {
+    await logSaveStorageDiagnosticsInDev();
+    return {
+      success: false,
+      reason: "storage-unavailable",
+      error: loadResult.error,
+    };
+  }
+
+  if (!manualLifeSavesResult.success) {
+    await logSaveStorageDiagnosticsInDev();
+    return {
+      success: false,
+      reason: "storage-unavailable",
+      error: manualLifeSavesResult.error,
+    };
+  }
+
   return {
+    success: true,
     household: loadResult.household,
-    manualLifeSlots: manualLifeSavesResult.success
-      ? manualLifeSavesResult.slots
-      : getEmptyManualLifeSaveSlots(),
-    notices: [loadResult.notice, manualLifeSavesResult.success ? null : manualLifeSavesResult.error]
-      .filter((message): message is string => !!message),
+    manualLifeSlots: manualLifeSavesResult.slots,
+    notices: [loadResult.notice].filter((message): message is string => !!message),
     loadResult,
   };
 };
 
 export const persistLoadedHouseholdIfNeeded = async (
-  loadResult: LoadHouseholdResult
+  loadResult: Extract<LoadHouseholdResult, { success: true }>
 ): Promise<AutosaveAttemptResult> => {
   if (!loadResult.shouldResave) {
     return {

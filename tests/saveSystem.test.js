@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
@@ -23,6 +24,8 @@ const {
   resetStorageAdapterOverrideForTests,
   saveHouseholdToStorage,
   saveLifeToSlot,
+  setNativeStorageAdapterOverrideForTests,
+  setPlatformOverrideForTests,
   setStorageAdapterOverrideForTests,
 } = require("../.tmp-tests/src/systems/saveSystem.js");
 const { startDating } = require("../.tmp-tests/src/systems/relationships.js");
@@ -98,11 +101,22 @@ const deferred = () => {
 
 test.beforeEach(() => {
   globalThis.localStorage = new LocalStorageMock();
+  globalThis.__TEST_PLATFORM_OS = "web";
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = {
+    async getItem() {
+      return null;
+    },
+    async setItem() {},
+    async removeItem() {},
+  };
   resetStorageAdapterOverrideForTests();
+  setPlatformOverrideForTests("web");
 });
 
 test.afterEach(() => {
   delete globalThis.localStorage;
+  delete globalThis.__TEST_PLATFORM_OS;
+  delete globalThis.__TEST_ASYNC_STORAGE_MODULE;
   resetStorageAdapterOverrideForTests();
 });
 
@@ -488,6 +502,7 @@ test("existing completed dating profiles are recognised during migration", () =>
 });
 
 test("web storage adapter path uses localStorage", async () => {
+  setPlatformOverrideForTests("web");
   globalThis.localStorage.setItem("web-key", "web-value");
 
   const result = await getStorageItem("web-key");
@@ -503,8 +518,10 @@ test("web storage adapter path uses localStorage", async () => {
 
 test("native storage adapter path uses AsyncStorage", async () => {
   const nativeStorage = new AsyncStorageMock();
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  globalThis.localStorage.setItem("native-key", "wrong-web-value");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("ios");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
   await nativeStorage.setItem("native-key", "native-value");
 
   const result = await getStorageItem("native-key");
@@ -516,6 +533,45 @@ test("native storage adapter path uses AsyncStorage", async () => {
 
   assert.equal(result.backend, "native");
   assert.equal(result.value, "native-value");
+});
+
+test("unavailable storage produces an explicit unavailable result", async () => {
+  setPlatformOverrideForTests("web");
+  delete globalThis.localStorage;
+
+  const result = await getStorageItem("missing-web-storage");
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.availability, "unavailable");
+    assert.equal(result.phase, "adapter-initialisation");
+  }
+});
+
+test("storage adapter initialisation errors are not treated as an empty save", async () => {
+  setPlatformOverrideForTests("android");
+  setStorageAdapterOverrideForTests({
+    kind: "native",
+  });
+  let created = 0;
+
+  const result = await loadOrCreateHousehold(() => {
+    created += 1;
+    return buildHousehold({ playerName: "Generated" });
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(created, 0);
+});
+
+test("AsyncStorage import is not dynamically swallowed", () => {
+  const source = fs.readFileSync(
+    "/Users/isabellealff/Documents/Dynasties/src/systems/saveSystem.ts",
+    "utf8"
+  );
+
+  assert.match(source, /import AsyncStorage from "@react-native-async-storage\/async-storage";/);
+  assert.doesNotMatch(source, /import\("@react-native-async-storage\/async-storage"\)/);
 });
 
 test("a player can save a complete household to slot 1", async () => {
@@ -565,12 +621,13 @@ test("a player can save a different household to slot 2", async () => {
 
 test("manual save persists through storage reinitialisation", async () => {
   const nativeStorage = new AsyncStorageMock();
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
   await saveLifeToSlot("slot_1", buildHousehold({ playerName: "Alex", currentYear: 2028 }));
   resetStorageAdapterOverrideForTests();
-  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
   const slots = await getManualLifeSaves();
 
@@ -581,6 +638,7 @@ test("manual save persists through storage reinitialisation", async () => {
 
   assert.equal(slots.slots[0].summary.activeCharacterName, "Alex Tester");
   assert.equal(slots.slots[0].summary.currentYear, 2028);
+  assert.equal(slots.slots[1].status, "empty");
 });
 
 test("manual load restores the complete household", async () => {
@@ -621,6 +679,7 @@ test("deleting slot 1 does not affect slot 2", async () => {
   }
 
   assert.equal(slots.slots[0].summary, null);
+  assert.equal(slots.slots[0].status, "empty");
   assert.equal(slots.slots[1].summary.activeCharacterName, "Casey Tester");
 });
 
@@ -699,8 +758,8 @@ test("the existing autosave remains separate from the two manual slots", async (
 
 test("startup waits for loading", async () => {
   const readGate = deferred();
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests({
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests({
     kind: "native",
     getItem: async () => readGate.promise,
     setItem: async () => {},
@@ -720,10 +779,122 @@ test("startup waits for loading", async () => {
   assert.equal(resolved, true);
 });
 
+test("storage read failure does not create a new household", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  nativeStorage.failRead = new Error("native read failed");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  let created = 0;
+
+  const loaded = await loadOrCreateHousehold(() => {
+    created += 1;
+    return buildHousehold({ playerName: "Generated" });
+  });
+
+  assert.equal(loaded.success, false);
+  assert.equal(created, 0);
+});
+
+test("storage read failure does not start autosave", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  nativeStorage.failRead = new Error("native read failed");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const initialState = await loadInitialAppState(() => buildHousehold({ playerName: "Generated" }));
+  const autosaveResult = await autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: initialState.success,
+    household: buildHousehold(),
+  });
+
+  assert.equal(initialState.success, false);
+  assert.equal(autosaveResult.attempted, false);
+  assert.equal(nativeStorage.store.has(HOUSEHOLD_STORAGE_KEY), false);
+});
+
+test("manual slot read failure does not replace slots with empty slots", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  await nativeStorage.setItem(MANUAL_SAVE_SLOT_KEYS.slot_1, JSON.stringify({
+    slotId: "slot_1",
+    saveVersion: 1,
+    savedAt: new Date().toISOString(),
+    household: buildHousehold(),
+  }));
+  nativeStorage.failRead = new Error("manual slot read failed");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const result = await getManualLifeSaves();
+
+  assert.equal(result.success, false);
+  assert.equal(nativeStorage.store.has(MANUAL_SAVE_SLOT_KEYS.slot_1), true);
+});
+
+test("one corrupted manual slot does not hide the other valid slot", async () => {
+  globalThis.localStorage.setItem(
+    MANUAL_SAVE_SLOT_KEYS.slot_1,
+    "{bad json"
+  );
+  await saveLifeToSlot("slot_2", buildHousehold({ playerName: "Casey", currentYear: 2038 }));
+
+  const result = await getManualLifeSaves();
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.slots[0].status, "corrupted");
+  assert.equal(result.slots[0].summary, null);
+  assert.match(result.slots[0].error, /could not be read/i);
+  assert.equal(result.slots[1].status, "available");
+  assert.equal(result.slots[1].summary.activeCharacterName, "Casey Tester");
+});
+
+test("an empty manual slot remains empty", async () => {
+  const result = await getManualLifeSaves();
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.slots[0].status, "empty");
+  assert.equal(result.slots[0].summary, null);
+  assert.equal(result.slots[1].status, "empty");
+  assert.equal(result.slots[1].summary, null);
+});
+
+test("existing storage keys remain unchanged", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  const initialValues = {
+    [HOUSEHOLD_STORAGE_KEY]: "primary-value",
+    [HOUSEHOLD_BACKUP_STORAGE_KEY]: "backup-value",
+    [MANUAL_SAVE_SLOT_KEYS.slot_1]: "slot1-value",
+    [MANUAL_SAVE_SLOT_KEYS.slot_2]: "slot2-value",
+  };
+  for (const [key, value] of Object.entries(initialValues)) {
+    await nativeStorage.setItem(key, value);
+  }
+  nativeStorage.failRead = new Error("read failed");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  await loadInitialAppState(() => buildHousehold({ playerName: "Generated" }));
+
+  for (const [key, value] of Object.entries(initialValues)) {
+    assert.equal(nativeStorage.store.get(key), value);
+  }
+});
+
 test("no new household is created before loading completes", async () => {
   const readGate = deferred();
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests({
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests({
     kind: "native",
     getItem: async () => readGate.promise,
     setItem: async () => {},
@@ -765,6 +936,10 @@ test("a loaded save is not overwritten immediately", async () => {
     buildHousehold({ playerName: "Generated", currentYear: 1999, includePartner: false })
   );
 
+  assert.equal(loadedState.success, true);
+  if (!loadedState.success) {
+    return;
+  }
   assert.equal(loadedState.loadResult.source, "primary");
   assert.equal(loadedState.household.currentYear, 2037);
   assert.equal(loadedState.household.characters[0].firstName, "Alex");
@@ -793,11 +968,356 @@ test("autosave preserves the previous primary as backup", async () => {
   assert.equal(primaryStored.household.currentYear, 2039);
 });
 
+test("a corrupted primary is not copied over a valid backup", async () => {
+  const existingBackup = buildHousehold({ currentYear: 2024, playerName: "Backup" });
+  globalThis.localStorage.setItem(HOUSEHOLD_STORAGE_KEY, "{bad json");
+  globalThis.localStorage.setItem(
+    HOUSEHOLD_BACKUP_STORAGE_KEY,
+    JSON.stringify({
+      saveVersion: 1,
+      savedAt: new Date().toISOString(),
+      household: existingBackup,
+    })
+  );
+
+  const result = await saveHouseholdToStorage(buildHousehold({ currentYear: 2040 }));
+
+  assert.equal(result.success, true);
+  const backupStored = JSON.parse(globalThis.localStorage.getItem(HOUSEHOLD_BACKUP_STORAGE_KEY));
+  assert.equal(backupStored.household.currentYear, 2024);
+  assert.equal(backupStored.household.characters[0].firstName, "Backup");
+});
+
+test("failure writing the backup does not overwrite the primary", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  const originalHousehold = buildHousehold({ currentYear: 2030, playerName: "Original" });
+  await nativeStorage.setItem(
+    HOUSEHOLD_STORAGE_KEY,
+    JSON.stringify({
+      saveVersion: 1,
+      savedAt: new Date().toISOString(),
+      household: originalHousehold,
+    })
+  );
+  const originalSetItem = nativeStorage.setItem.bind(nativeStorage);
+  nativeStorage.setItem = async (key, value) => {
+    if (key === HOUSEHOLD_BACKUP_STORAGE_KEY) {
+      throw new Error("backup write failed");
+    }
+
+    await originalSetItem(key, value);
+  };
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const result = await saveHouseholdToStorage(buildHousehold({ currentYear: 2041 }));
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error, /backup write failed/i);
+  }
+  const primaryStored = JSON.parse(await nativeStorage.getItem(HOUSEHOLD_STORAGE_KEY));
+  assert.equal(primaryStored.household.currentYear, 2030);
+  assert.equal(primaryStored.household.characters[0].firstName, "Original");
+});
+
+test("failure writing the new primary returns a failure result", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  await nativeStorage.setItem(
+    HOUSEHOLD_STORAGE_KEY,
+    JSON.stringify({
+      saveVersion: 1,
+      savedAt: new Date().toISOString(),
+      household: buildHousehold({ currentYear: 2032 }),
+    })
+  );
+  const originalSetItem = nativeStorage.setItem.bind(nativeStorage);
+  nativeStorage.setItem = async (key, value) => {
+    if (key === HOUSEHOLD_STORAGE_KEY) {
+      throw new Error("primary write failed");
+    }
+
+    await originalSetItem(key, value);
+  };
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const result = await saveHouseholdToStorage(buildHousehold({ currentYear: 2045 }));
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error, /primary write failed/i);
+  }
+});
+
+test("older autosaves cannot overwrite newer autosaves", async () => {
+  const writeGate = deferred();
+  const nativeStorage = new AsyncStorageMock();
+  const originalSetItem = nativeStorage.setItem.bind(nativeStorage);
+  let primaryWriteCount = 0;
+  nativeStorage.setItem = async (key, value) => {
+    if (key === HOUSEHOLD_STORAGE_KEY) {
+      primaryWriteCount += 1;
+      if (primaryWriteCount === 1) {
+        await writeGate.promise;
+      }
+    }
+
+    await originalSetItem(key, value);
+  };
+
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const firstAutosave = autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2028 }),
+  });
+  await Promise.resolve();
+  const secondAutosave = autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2044 }),
+  });
+
+  writeGate.resolve();
+  await Promise.all([firstAutosave, secondAutosave]);
+
+  const stored = JSON.parse(await nativeStorage.getItem(HOUSEHOLD_STORAGE_KEY));
+  assert.equal(stored.household.currentYear, 2044);
+});
+
+test("overlapping autosave requests execute sequentially", async () => {
+  const firstWriteGate = deferred();
+  const nativeStorage = new AsyncStorageMock();
+  const originalSetItem = nativeStorage.setItem.bind(nativeStorage);
+  const writeEvents = [];
+  let primaryWriteCount = 0;
+  nativeStorage.setItem = async (key, value) => {
+    if (key === HOUSEHOLD_STORAGE_KEY) {
+      primaryWriteCount += 1;
+      const writeNumber = primaryWriteCount;
+      writeEvents.push(`start-${writeNumber}`);
+      if (writeNumber === 1) {
+        await firstWriteGate.promise;
+      }
+      await originalSetItem(key, value);
+      writeEvents.push(`end-${writeNumber}`);
+      return;
+    }
+
+    await originalSetItem(key, value);
+  };
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const firstAutosave = autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2033 }),
+  });
+  await Promise.resolve();
+  const secondAutosave = autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2034 }),
+  });
+
+  firstWriteGate.resolve();
+  await Promise.all([firstAutosave, secondAutosave]);
+
+  assert.deepEqual(writeEvents, ["start-1", "end-1", "start-2", "end-2"]);
+});
+
+test("a failed autosave write does not block later writes", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  const originalSetItem = nativeStorage.setItem.bind(nativeStorage);
+  let primaryWriteCount = 0;
+  nativeStorage.setItem = async (key, value) => {
+    if (key === HOUSEHOLD_STORAGE_KEY) {
+      primaryWriteCount += 1;
+      if (primaryWriteCount === 1) {
+        throw new Error("first write failed");
+      }
+    }
+
+    await originalSetItem(key, value);
+  };
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const failed = await autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2035 }),
+  });
+  const succeeded = await autosaveHouseholdIfReady({
+    hasFinishedInitialLoad: true,
+    household: buildHousehold({ currentYear: 2036 }),
+  });
+
+  assert.equal(failed.attempted, true);
+  assert.equal(failed.success, false);
+  assert.equal(succeeded.attempted, true);
+  assert.equal(succeeded.success, true);
+  const stored = JSON.parse(await nativeStorage.getItem(HOUSEHOLD_STORAGE_KEY));
+  assert.equal(stored.household.currentYear, 2036);
+});
+
+test("Retry can successfully load the previously stored household", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  const savedHousehold = buildHousehold({ currentYear: 2042, playerName: "Alex" });
+  await nativeStorage.setItem(
+    HOUSEHOLD_STORAGE_KEY,
+    JSON.stringify({
+      saveVersion: 1,
+      savedAt: new Date().toISOString(),
+      household: savedHousehold,
+    })
+  );
+  nativeStorage.failRead = new Error("temporary read failure");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const failedLoad = await loadInitialAppState(() => buildHousehold({ playerName: "Generated" }));
+  nativeStorage.failRead = null;
+  const retriedLoad = await loadInitialAppState(() => buildHousehold({ playerName: "Generated" }));
+
+  assert.equal(failedLoad.success, false);
+  assert.equal(retriedLoad.success, true);
+  if (!retriedLoad.success) {
+    return;
+  }
+
+  assert.equal(retriedLoad.household.currentYear, 2042);
+  assert.equal(retriedLoad.household.characters[0].firstName, "Alex");
+});
+
+test("corrupted primary with valid backup recovers the backup", async () => {
+  const backupHousehold = buildHousehold({ currentYear: 2043, playerName: "Backup" });
+  globalThis.localStorage.setItem(HOUSEHOLD_STORAGE_KEY, "{bad json");
+  globalThis.localStorage.setItem(
+    HOUSEHOLD_BACKUP_STORAGE_KEY,
+    JSON.stringify({
+      saveVersion: 1,
+      savedAt: new Date().toISOString(),
+      household: backupHousehold,
+    })
+  );
+
+  const loaded = await loadOrCreateHousehold(() => buildHousehold({ playerName: "Generated" }));
+
+  assert.equal(loaded.success, true);
+  if (!loaded.success) {
+    return;
+  }
+
+  assert.equal(loaded.source, "backup");
+  assert.equal(loaded.household.currentYear, 2043);
+  assert.equal(loaded.household.characters[0].firstName, "Backup");
+  assert.match(loaded.notice, /backup/i);
+});
+
+test("confirmed null values can create a new household", async () => {
+  const nativeStorage = new AsyncStorageMock();
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = nativeStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+
+  const loaded = await loadOrCreateHousehold(() =>
+    buildHousehold({ playerName: "Generated", currentYear: 1999, includePartner: false })
+  );
+
+  assert.equal(loaded.success, true);
+  if (!loaded.success) {
+    return;
+  }
+  assert.equal(loaded.source, "new");
+  assert.equal(loaded.household.currentYear, 1999);
+});
+
+test("an error is distinguishable from an empty result", async () => {
+  const emptyStorage = new AsyncStorageMock();
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = emptyStorage;
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(emptyStorage));
+  const emptyResult = await loadOrCreateHousehold(() => buildHousehold({ playerName: "Generated" }));
+
+  const failingStorage = new AsyncStorageMock();
+  failingStorage.failRead = new Error("read failed");
+  globalThis.__TEST_ASYNC_STORAGE_MODULE = failingStorage;
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(failingStorage));
+  const errorResult = await loadOrCreateHousehold(() => buildHousehold({ playerName: "Generated" }));
+
+  assert.equal(emptyResult.success, true);
+  if (emptyResult.success) {
+    assert.equal(emptyResult.source, "new");
+  }
+  assert.equal(errorResult.success, false);
+});
+
+test("a save using birthYear without stored age is accepted", async () => {
+  const modernHousehold = buildHousehold({ currentYear: 2034 });
+  const modernSave = {
+    saveVersion: 1,
+    savedAt: new Date().toISOString(),
+    household: {
+      ...modernHousehold,
+      characters: modernHousehold.characters.map((character) => {
+        const nextCharacter = { ...character };
+        delete nextCharacter.age;
+        return nextCharacter;
+      }),
+    },
+  };
+  globalThis.localStorage.setItem(HOUSEHOLD_STORAGE_KEY, JSON.stringify(modernSave));
+
+  const loaded = await loadOrCreateHousehold(() => buildHousehold({ playerName: "Generated" }));
+
+  assert.equal(loaded.success, true);
+  if (!loaded.success) {
+    return;
+  }
+  assert.equal(loaded.source, "primary");
+  assert.equal(loaded.household.currentYear, 2034);
+  assert.equal(
+    Number.isFinite(loaded.household.characters[0].birthYear),
+    true
+  );
+});
+
+test("a legacy save using age without birthYear is migrated successfully", async () => {
+  const legacyHousehold = buildHousehold({ currentYear: 2031 });
+  const rawLegacySave = {
+    saveVersion: 1,
+    savedAt: new Date().toISOString(),
+    household: {
+      ...legacyHousehold,
+      characters: legacyHousehold.characters.map((character) => {
+        const nextCharacter = { ...character };
+        delete nextCharacter.birthYear;
+        return nextCharacter;
+      }),
+    },
+  };
+  globalThis.localStorage.setItem(HOUSEHOLD_STORAGE_KEY, JSON.stringify(rawLegacySave));
+
+  const loaded = await loadOrCreateHousehold(() => buildHousehold({ playerName: "Generated" }));
+
+  assert.equal(loaded.success, true);
+  if (!loaded.success) {
+    return;
+  }
+  assert.equal(loaded.source, "primary");
+  assert.equal(loaded.household.currentYear, 2031);
+  assert.equal(
+    Number.isFinite(loaded.household.characters[0].birthYear),
+    true
+  );
+});
+
 test("storage failures return errors", async () => {
   const nativeStorage = new AsyncStorageMock();
   nativeStorage.failWrite = new Error("disk full");
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
   const result = await saveHouseholdToStorage(buildHousehold());
 
@@ -810,8 +1330,8 @@ test("storage failures return errors", async () => {
 test("success is not reported when a write fails", async () => {
   const nativeStorage = new AsyncStorageMock();
   nativeStorage.failWrite = new Error("write blocked");
-  delete globalThis.localStorage;
-  setStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
+  setPlatformOverrideForTests("android");
+  setNativeStorageAdapterOverrideForTests(createNativeAdapter(nativeStorage));
 
   const result = await saveLifeToSlot("slot_1", buildHousehold());
 

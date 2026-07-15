@@ -1,3 +1,5 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
 import { buildAcademicPerformanceProfile } from "./education";
 import {
   getDatingRoseStateForYear,
@@ -55,16 +57,28 @@ export type ManualLifeSaveSummary = {
 export type ManualLifeSaveSlot = {
   slotId: ManualSaveSlotId;
   slotLabel: string;
+  status: "empty" | "available" | "corrupted";
   summary: ManualLifeSaveSummary | null;
+  error: string | null;
 };
 
-export type LoadHouseholdResult = {
-  household: Household;
-  shouldResave: boolean;
-  source: "primary" | "backup" | "new";
-  usedLegacyFormat: boolean;
-  notice: string | null;
-};
+export type StorageAvailability = "available" | "unavailable";
+
+export type LoadHouseholdResult =
+  | {
+      success: true;
+      household: Household;
+      shouldResave: boolean;
+      source: "primary" | "backup" | "new";
+      usedLegacyFormat: boolean;
+      notice: string | null;
+    }
+  | {
+      success: false;
+      storageAvailability: StorageAvailability;
+      reason: "storage-unavailable";
+      error: string;
+    };
 
 type StorageBackendKind = "web" | "native";
 
@@ -76,6 +90,9 @@ type StorageReadResult =
     }
   | {
       success: false;
+      availability: StorageAvailability;
+      backend: StorageBackendKind | "unknown";
+      phase: "adapter-initialisation" | "reading";
       error: string;
     };
 
@@ -86,6 +103,9 @@ type StorageWriteResult =
     }
   | {
       success: false;
+      availability: StorageAvailability;
+      backend: StorageBackendKind | "unknown";
+      phase: "adapter-initialisation" | "writing" | "deleting";
       error: string;
     };
 
@@ -109,6 +129,7 @@ export type ManualLifeSaveSlotsResult =
     }
   | {
       success: false;
+      reason: "storage-unavailable";
       error: string;
     };
 
@@ -158,6 +179,19 @@ type StorageAdapter = {
   setItem(key: string, value: string): Promise<void>;
   removeItem(key: string): Promise<void>;
 };
+
+type StorageAdapterLoadResult =
+  | {
+      success: true;
+      adapter: StorageAdapter;
+    }
+  | {
+      success: false;
+      availability: StorageAvailability;
+      backend: StorageBackendKind | "unknown";
+      phase: "adapter-initialisation";
+      error: string;
+    };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -589,11 +623,14 @@ const hydrateCharacter = (
 const isCharacterLike = (value: unknown): value is Character => {
   if (!isRecord(value)) return false;
 
+  const hasBirthYear = isFiniteNumber(value.birthYear);
+  const hasAge = isFiniteNumber(value.age);
+
   return (
     typeof value.id === "string" &&
     typeof value.firstName === "string" &&
     typeof value.lastName === "string" &&
-    isFiniteNumber(value.age) &&
+    (hasBirthYear || hasAge) &&
     typeof value.gender === "string" &&
     typeof value.race === "string" &&
     Array.isArray(value.traits) &&
@@ -716,6 +753,22 @@ const buildStoredSaveNotice = (
   return reasons.join("\n");
 };
 
+const logSaveParsingDetail = ({
+  scope,
+  error,
+}: {
+  scope: string;
+  error: string;
+}) => {
+  if (!isDevelopmentRuntime()) {
+    return;
+  }
+
+  console.error(
+    `[saveSystem] platform=${getRuntimePlatform()} phase=parsing scope=${scope} message=${error}`
+  );
+};
+
 const parseStoredHousehold = (
   rawSave: string,
   options?: {
@@ -762,108 +815,283 @@ const parseStoredHousehold = (
       };
     }
   } catch (error) {
+    const message =
+      error instanceof Error && error.message
+        ? `Saved data could not be read: ${error.message}`
+        : "Saved data could not be read.";
+    logSaveParsingDetail({
+      scope: options?.expectedSlotId ?? "autosave",
+      error: message,
+    });
     return {
       success: false,
-      error:
-        error instanceof Error && error.message
-          ? `Saved data could not be read: ${error.message}`
-          : "Saved data could not be read.",
+      error: message,
     };
   }
 
+  logSaveParsingDetail({
+    scope: options?.expectedSlotId ?? "autosave",
+    error: "Saved data is not in a recognised format.",
+  });
   return {
     success: false,
     error: "Saved data is not in a recognised format.",
   };
 };
 
+const storageWriteQueues = new Map<string, Promise<void>>();
+
+const runStorageWriteSerially = async <T>(
+  queueKey: string,
+  operation: () => Promise<T>
+): Promise<T> => {
+  const previous = storageWriteQueues.get(queueKey) ?? Promise.resolve();
+  let releaseQueue!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  const next = previous.then(() => current, () => current);
+  storageWriteQueues.set(queueKey, next);
+
+  await previous.catch(() => undefined);
+
+  try {
+    return await operation();
+  } finally {
+    releaseQueue();
+    if (storageWriteQueues.get(queueKey) === next) {
+      storageWriteQueues.delete(queueKey);
+    }
+  }
+};
+
 let storageAdapterOverride: StorageAdapter | null = null;
-let asyncStorageAdapterPromise: Promise<StorageAdapter | null> | null = null;
+let platformOverrideForTests: typeof Platform.OS | null = null;
+let nativeStorageAdapterOverrideForTests: StorageAdapter | null = null;
 
 const canUseLocalStorage = () => typeof globalThis.localStorage !== "undefined";
+const getRuntimePlatform = () => platformOverrideForTests ?? Platform.OS;
 
-const getWebStorageAdapter = (): StorageAdapter | null => {
-  if (!canUseLocalStorage()) {
-    return null;
+const STORAGE_DIAGNOSTIC_KEYS = [
+  HOUSEHOLD_STORAGE_KEY,
+  HOUSEHOLD_BACKUP_STORAGE_KEY,
+  MANUAL_SAVE_SLOT_KEYS.slot_1,
+  MANUAL_SAVE_SLOT_KEYS.slot_2,
+] as const;
+
+const isDevelopmentRuntime = () =>
+  (globalThis as { __DEV__?: boolean }).__DEV__ === true ||
+  (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV !==
+    "production";
+
+const buildStorageOperationDetail = ({
+  backend,
+  operation,
+  error,
+}: {
+  backend: StorageBackendKind;
+  operation: "getItem" | "setItem" | "removeItem";
+  error: unknown;
+}) => {
+  const originalMessage =
+    error instanceof Error && error.message ? error.message : "Unknown error";
+
+  return [
+    `platform=${getRuntimePlatform()}`,
+    `backend=${backend}`,
+    `operation=${operation}`,
+    `message=${originalMessage}`,
+  ].join(" ");
+};
+
+const logStorageOperationDetail = (detail: string) => {
+  if (isDevelopmentRuntime()) {
+    console.error(`[saveSystem] ${detail}`);
   }
+};
+
+const buildStorageAdapterInitialisationError = ({
+  backend,
+  error,
+}: {
+  backend: StorageBackendKind | "unknown";
+  error: unknown;
+}): StorageAdapterLoadResult => {
+  const originalMessage =
+    error instanceof Error && error.message ? error.message : "Unknown error";
+  const detail = [
+    `platform=${getRuntimePlatform()}`,
+    `backend=${backend}`,
+    "phase=adapter-initialisation",
+    `message=${originalMessage}`,
+  ].join(" ");
+  logStorageOperationDetail(detail);
 
   return {
-    kind: "web",
-    async getItem(key) {
-      return globalThis.localStorage.getItem(key);
-    },
-    async setItem(key, value) {
-      globalThis.localStorage.setItem(key, value);
-    },
-    async removeItem(key) {
-      globalThis.localStorage.removeItem(key);
-    },
+    success: false,
+    availability: "unavailable",
+    backend,
+    phase: "adapter-initialisation",
+    error: `Persistent storage is unavailable. ${detail}`,
   };
 };
 
-const loadAsyncStorageAdapter = async (): Promise<StorageAdapter | null> => {
-  if (asyncStorageAdapterPromise !== null) {
-    return asyncStorageAdapterPromise;
+const validateStorageAdapter = (
+  adapter: StorageAdapter | null,
+  backend: StorageBackendKind | "unknown"
+): StorageAdapterLoadResult => {
+  if (
+    !adapter ||
+    typeof adapter.getItem !== "function" ||
+    typeof adapter.setItem !== "function" ||
+    typeof adapter.removeItem !== "function"
+  ) {
+    return buildStorageAdapterInitialisationError({
+      backend,
+      error: new Error("Storage adapter is not configured correctly."),
+    });
   }
 
-  asyncStorageAdapterPromise = import("@react-native-async-storage/async-storage")
-    .then((module) => {
-      const asyncStorage = module.default;
-      if (!asyncStorage) {
-        return null;
-      }
-
-      return {
-        kind: "native" as const,
-        getItem: (key: string) => asyncStorage.getItem(key),
-        setItem: (key: string, value: string) => asyncStorage.setItem(key, value),
-        removeItem: (key: string) => asyncStorage.removeItem(key),
-      };
-    })
-    .catch(() => null);
-
-  return asyncStorageAdapterPromise;
+  return {
+    success: true,
+    adapter,
+  };
 };
 
-const getStorageAdapter = async (): Promise<StorageAdapter | null> => {
-  if (storageAdapterOverride !== null) {
-    return storageAdapterOverride;
+const getWebStorageAdapter = (): StorageAdapterLoadResult => {
+  if (!canUseLocalStorage()) {
+    return buildStorageAdapterInitialisationError({
+      backend: "web",
+      error: new Error("localStorage is not available."),
+    });
   }
 
-  return getWebStorageAdapter() ?? (await loadAsyncStorageAdapter());
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) {
+      return buildStorageAdapterInitialisationError({
+        backend: "web",
+        error: new Error("localStorage is not available."),
+      });
+    }
+
+    return validateStorageAdapter(
+      {
+        kind: "web",
+        async getItem(key) {
+          return storage.getItem(key);
+        },
+        async setItem(key, value) {
+          storage.setItem(key, value);
+        },
+        async removeItem(key) {
+          storage.removeItem(key);
+        },
+      },
+      "web"
+    );
+  } catch (error) {
+    return buildStorageAdapterInitialisationError({
+      backend: "web",
+      error,
+    });
+  }
+};
+
+const nativeStorageAdapter: StorageAdapter = {
+  kind: "native",
+  getItem: (key) => AsyncStorage.getItem(key),
+  setItem: (key, value) => AsyncStorage.setItem(key, value),
+  removeItem: (key) => AsyncStorage.removeItem(key),
+};
+
+const getStorageAdapter = async (): Promise<StorageAdapterLoadResult> => {
+  if (storageAdapterOverride !== null) {
+    return validateStorageAdapter(storageAdapterOverride, storageAdapterOverride.kind);
+  }
+
+  if (getRuntimePlatform() === "web") {
+    return getWebStorageAdapter();
+  }
+
+  const adapter = nativeStorageAdapterOverrideForTests ?? nativeStorageAdapter;
+  return validateStorageAdapter(adapter, adapter.kind);
 };
 
 export const setStorageAdapterOverrideForTests = (adapter: StorageAdapter | null) => {
   storageAdapterOverride = adapter;
 };
 
+export const setPlatformOverrideForTests = (platform: typeof Platform.OS | null) => {
+  platformOverrideForTests = platform;
+};
+
+export const setNativeStorageAdapterOverrideForTests = (
+  adapter: StorageAdapter | null
+) => {
+  nativeStorageAdapterOverrideForTests = adapter;
+};
+
 export const resetStorageAdapterOverrideForTests = () => {
   storageAdapterOverride = null;
-  asyncStorageAdapterPromise = null;
+  platformOverrideForTests = null;
+  nativeStorageAdapterOverrideForTests = null;
+};
+
+export const logSaveStorageDiagnosticsInDev = async () => {
+  if (!isDevelopmentRuntime()) {
+    return;
+  }
+
+  const storageAdapter = await getStorageAdapter();
+  if (!storageAdapter.success) {
+    console.warn(`[saveSystem] diagnostics skipped ${storageAdapter.error}`);
+    return;
+  }
+
+  for (const key of STORAGE_DIAGNOSTIC_KEYS) {
+    try {
+      const value = await storageAdapter.adapter.getItem(key);
+      console.warn(
+        `[saveSystem] key=${key} exists=${value !== null} length=${value?.length ?? 0}`
+      );
+    } catch (error) {
+      const detail = buildStorageOperationDetail({
+        backend: storageAdapter.adapter.kind,
+        operation: "getItem",
+        error,
+      });
+      console.warn(`[saveSystem] diagnostic key=${key} ${detail}`);
+    }
+  }
 };
 
 export const getStorageItem = async (key: string): Promise<StorageReadResult> => {
   const storageAdapter = await getStorageAdapter();
-  if (!storageAdapter) {
-    return {
-      success: false,
-      error: "Persistent storage is unavailable.",
-    };
+  if (!storageAdapter.success) {
+    return storageAdapter;
   }
 
   try {
     return {
       success: true,
-      value: await storageAdapter.getItem(key),
-      backend: storageAdapter.kind,
+      value: await storageAdapter.adapter.getItem(key),
+      backend: storageAdapter.adapter.kind,
     };
   } catch (error) {
+    const detail = buildStorageOperationDetail({
+      backend: storageAdapter.adapter.kind,
+      operation: "getItem",
+      error,
+    });
+    logStorageOperationDetail(detail);
     return {
       success: false,
-      error:
-        error instanceof Error && error.message
-          ? `Persistent storage could not be read: ${error.message}`
-          : "Persistent storage could not be read.",
+      availability: "unavailable",
+      backend: storageAdapter.adapter.kind,
+      phase: "reading",
+      error: `Persistent storage could not be read. ${detail}`,
     };
   }
 };
@@ -873,52 +1101,58 @@ export const setStorageItem = async (
   value: string
 ): Promise<StorageWriteResult> => {
   const storageAdapter = await getStorageAdapter();
-  if (!storageAdapter) {
-    return {
-      success: false,
-      error: "Persistent storage is unavailable.",
-    };
+  if (!storageAdapter.success) {
+    return storageAdapter;
   }
 
   try {
-    await storageAdapter.setItem(key, value);
+    await storageAdapter.adapter.setItem(key, value);
     return {
       success: true,
-      backend: storageAdapter.kind,
+      backend: storageAdapter.adapter.kind,
     };
   } catch (error) {
+    const detail = buildStorageOperationDetail({
+      backend: storageAdapter.adapter.kind,
+      operation: "setItem",
+      error,
+    });
+    logStorageOperationDetail(detail);
     return {
       success: false,
-      error:
-        error instanceof Error && error.message
-          ? `Persistent storage could not be written: ${error.message}`
-          : "Persistent storage could not be written.",
+      availability: "unavailable",
+      backend: storageAdapter.adapter.kind,
+      phase: "writing",
+      error: `Persistent storage could not be written. ${detail}`,
     };
   }
 };
 
 export const removeStorageItem = async (key: string): Promise<StorageWriteResult> => {
   const storageAdapter = await getStorageAdapter();
-  if (!storageAdapter) {
-    return {
-      success: false,
-      error: "Persistent storage is unavailable.",
-    };
+  if (!storageAdapter.success) {
+    return storageAdapter;
   }
 
   try {
-    await storageAdapter.removeItem(key);
+    await storageAdapter.adapter.removeItem(key);
     return {
       success: true,
-      backend: storageAdapter.kind,
+      backend: storageAdapter.adapter.kind,
     };
   } catch (error) {
+    const detail = buildStorageOperationDetail({
+      backend: storageAdapter.adapter.kind,
+      operation: "removeItem",
+      error,
+    });
+    logStorageOperationDetail(detail);
     return {
       success: false,
-      error:
-        error instanceof Error && error.message
-          ? `Persistent storage could not be updated: ${error.message}`
-          : "Persistent storage could not be updated.",
+      availability: "unavailable",
+      backend: storageAdapter.adapter.kind,
+      phase: "deleting",
+      error: `Persistent storage could not be updated. ${detail}`,
     };
   }
 };
@@ -929,11 +1163,10 @@ export const loadOrCreateHousehold = async (
   const primaryRead = await getStorageItem(HOUSEHOLD_STORAGE_KEY);
   if (!primaryRead.success) {
     return {
-      household: hydrateHousehold(createHousehold()),
-      shouldResave: false,
-      source: "new",
-      usedLegacyFormat: false,
-      notice: primaryRead.error,
+      success: false,
+      storageAvailability: primaryRead.availability,
+      reason: "storage-unavailable",
+      error: primaryRead.error,
     };
   }
 
@@ -945,6 +1178,7 @@ export const loadOrCreateHousehold = async (
     if (parsedPrimary.success) {
       const hydrated = hydrateHousehold(parsedPrimary.household);
       return {
+        success: true,
         household: hydrated,
         shouldResave: parsedPrimary.shouldResave || hydrated !== parsedPrimary.household,
         source: "primary",
@@ -960,11 +1194,10 @@ export const loadOrCreateHousehold = async (
   const backupRead = await getStorageItem(HOUSEHOLD_BACKUP_STORAGE_KEY);
   if (!backupRead.success) {
     return {
-      household: hydrateHousehold(createHousehold()),
-      shouldResave: false,
-      source: "new",
-      usedLegacyFormat: false,
-      notice: buildStoredSaveNotice(primaryError, backupRead.error),
+      success: false,
+      storageAvailability: backupRead.availability,
+      reason: "storage-unavailable",
+      error: buildStoredSaveNotice(primaryError, backupRead.error) ?? backupRead.error,
     };
   }
 
@@ -974,13 +1207,14 @@ export const loadOrCreateHousehold = async (
     if (parsedBackup.success) {
       const hydrated = hydrateHousehold(parsedBackup.household);
       return {
+        success: true,
         household: hydrated,
         shouldResave: true,
         source: "backup",
         usedLegacyFormat: parsedBackup.usedLegacyFormat,
-        notice:
-          primaryError ??
-          "Primary autosave was unavailable. Recovered your most recent backup.",
+        notice: primaryError
+          ? `${primaryError}\nRecovered your most recent backup.`
+          : "Primary autosave was unavailable. Recovered your most recent backup.",
       };
     }
 
@@ -989,6 +1223,7 @@ export const loadOrCreateHousehold = async (
   }
 
   return {
+    success: true,
     household: hydrateHousehold(createHousehold()),
     shouldResave: false,
     source: "new",
@@ -1037,11 +1272,17 @@ const buildManualLifeSaveSummary = (
 
 const buildManualLifeSaveSlot = (
   slotId: ManualSaveSlotId,
-  summary: ManualLifeSaveSummary | null
+  summary: ManualLifeSaveSummary | null,
+  options?: {
+    status?: ManualLifeSaveSlot["status"];
+    error?: string | null;
+  }
 ): ManualLifeSaveSlot => ({
   slotId,
   slotLabel: getManualSaveSlotLabel(slotId),
+  status: options?.status ?? (summary ? "available" : "empty"),
   summary,
+  error: options?.error ?? null,
 });
 
 export const getEmptyManualLifeSaveSlots = () =>
@@ -1050,58 +1291,74 @@ export const getEmptyManualLifeSaveSlots = () =>
 export const saveHouseholdToStorage = async (
   household: Household
 ): Promise<SaveHouseholdToStorageResult> => {
-  if (!isHouseholdLike(household)) {
-    return {
-      success: false,
-      error: "Your life could not be saved.",
-    };
-  }
+  return await runStorageWriteSerially(
+    HOUSEHOLD_STORAGE_KEY,
+    async (): Promise<SaveHouseholdToStorageResult> => {
+      if (!isHouseholdLike(household)) {
+        return {
+          success: false,
+          error: "Your life could not be saved.",
+        };
+      }
 
-  let serializedSave: string;
-  try {
-    serializedSave = JSON.stringify(buildGameSave(household));
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error && error.message
-          ? `Your life could not be saved. ${error.message}`
-          : "Your life could not be saved.",
-    };
-  }
+      let serializedSave: string;
+      try {
+        serializedSave = JSON.stringify(buildGameSave(household));
+      } catch (error) {
+        return {
+          success: false,
+          error:
+            error instanceof Error && error.message
+              ? `Your life could not be saved. ${error.message}`
+              : "Your life could not be saved.",
+        };
+      }
 
-  const currentPrimaryRead = await getStorageItem(HOUSEHOLD_STORAGE_KEY);
-  if (!currentPrimaryRead.success) {
-    return {
-      success: false,
-      error: currentPrimaryRead.error,
-    };
-  }
+      const parsedSerializedSave = parseStoredHousehold(serializedSave);
+      if (!parsedSerializedSave.success) {
+        return {
+          success: false,
+          error: `Your life could not be saved. ${parsedSerializedSave.error}`,
+        };
+      }
 
-  if (currentPrimaryRead.value) {
-    const backupWrite = await setStorageItem(
-      HOUSEHOLD_BACKUP_STORAGE_KEY,
-      currentPrimaryRead.value
-    );
-    if (!backupWrite.success) {
+      const currentPrimaryRead = await getStorageItem(HOUSEHOLD_STORAGE_KEY);
+      if (!currentPrimaryRead.success) {
+        return {
+          success: false,
+          error: currentPrimaryRead.error,
+        };
+      }
+
+      if (currentPrimaryRead.value) {
+        const parsedExistingPrimary = parseStoredHousehold(currentPrimaryRead.value);
+        if (parsedExistingPrimary.success) {
+          const backupWrite = await setStorageItem(
+            HOUSEHOLD_BACKUP_STORAGE_KEY,
+            currentPrimaryRead.value
+          );
+          if (!backupWrite.success) {
+            return {
+              success: false,
+              error: `Your life could not be saved. ${backupWrite.error}`,
+            };
+          }
+        }
+      }
+
+      const primaryWrite = await setStorageItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
+      if (!primaryWrite.success) {
+        return {
+          success: false,
+          error: `Your life could not be saved. ${primaryWrite.error}`,
+        };
+      }
+
       return {
-        success: false,
-        error: `Your life could not be saved. ${backupWrite.error}`,
+        success: true,
       };
     }
-  }
-
-  const primaryWrite = await setStorageItem(HOUSEHOLD_STORAGE_KEY, serializedSave);
-  if (!primaryWrite.success) {
-    return {
-      success: false,
-      error: `Your life could not be saved. ${primaryWrite.error}`,
-    };
-  }
-
-  return {
-    success: true,
-  };
+  );
 };
 
 export const getManualLifeSaves = async (): Promise<ManualLifeSaveSlotsResult> => {
@@ -1112,6 +1369,7 @@ export const getManualLifeSaves = async (): Promise<ManualLifeSaveSlotsResult> =
     if (!readResult.success) {
       return {
         success: false,
+        reason: "storage-unavailable",
         error: readResult.error,
       };
     }
@@ -1124,10 +1382,11 @@ export const getManualLifeSaves = async (): Promise<ManualLifeSaveSlotsResult> =
       expectedSlotId: slotId,
     });
     if (!parsed.success) {
-      return {
-        success: false,
+      slots[MANUAL_SAVE_SLOT_IDS.indexOf(slotId)] = buildManualLifeSaveSlot(slotId, null, {
+        status: "corrupted",
         error: `${getManualSaveSlotLabel(slotId)} could not be read. ${parsed.error}`,
-      };
+      });
+      continue;
     }
 
     const hydrated = hydrateHousehold(parsed.household);
@@ -1159,39 +1418,57 @@ export const saveLifeToSlot = async (
     };
   }
 
-  if (!isHouseholdLike(household)) {
-    return {
-      success: false,
-      error: "The current life could not be saved.",
-    };
-  }
+  return await runStorageWriteSerially(
+    MANUAL_SAVE_SLOT_KEYS[slotId],
+    async (): Promise<ManualLifeSaveOperationResult> => {
+      if (!isHouseholdLike(household)) {
+        return {
+          success: false,
+          error: "The current life could not be saved.",
+        };
+      }
 
-  let serializedSave: string;
-  const manualLifeSave = buildManualLifeSave(slotId, household);
-  try {
-    serializedSave = JSON.stringify(manualLifeSave);
-  } catch {
-    return {
-      success: false,
-      error: "The current life could not be saved.",
-    };
-  }
+      let serializedSave: string;
+      const manualLifeSave = buildManualLifeSave(slotId, household);
+      try {
+        serializedSave = JSON.stringify(manualLifeSave);
+      } catch {
+        return {
+          success: false,
+          error: "The current life could not be saved.",
+        };
+      }
 
-  const writeResult = await setStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId], serializedSave);
-  if (!writeResult.success) {
-    return {
-      success: false,
-      error: writeResult.error,
-    };
-  }
+      const parsedSerializedSave = parseStoredHousehold(serializedSave, {
+        expectedSlotId: slotId,
+      });
+      if (!parsedSerializedSave.success) {
+        return {
+          success: false,
+          error: `The current life could not be saved. ${parsedSerializedSave.error}`,
+        };
+      }
 
-  return {
-    success: true,
-    slot: buildManualLifeSaveSlot(
-      slotId,
-      buildManualLifeSaveSummary(slotId, household, manualLifeSave.savedAt)
-    ),
-  };
+      const writeResult = await setStorageItem(
+        MANUAL_SAVE_SLOT_KEYS[slotId],
+        serializedSave
+      );
+      if (!writeResult.success) {
+        return {
+          success: false,
+          error: writeResult.error,
+        };
+      }
+
+      return {
+        success: true,
+        slot: buildManualLifeSaveSlot(
+          slotId,
+          buildManualLifeSaveSummary(slotId, household, manualLifeSave.savedAt)
+        ),
+      };
+    }
+  );
 };
 
 export const loadLifeFromSlot = async (
@@ -1251,18 +1528,23 @@ export const deleteLifeSave = async (
     };
   }
 
-  const deleteResult = await removeStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
-  if (!deleteResult.success) {
-    return {
-      success: false,
-      error: deleteResult.error,
-    };
-  }
+  return await runStorageWriteSerially(
+    MANUAL_SAVE_SLOT_KEYS[slotId],
+    async (): Promise<DeleteLifeSaveResult> => {
+      const deleteResult = await removeStorageItem(MANUAL_SAVE_SLOT_KEYS[slotId]);
+      if (!deleteResult.success) {
+        return {
+          success: false,
+          error: deleteResult.error,
+        };
+      }
 
-  return {
-    success: true,
-    slotId,
-  };
+      return {
+        success: true,
+        slotId,
+      };
+    }
+  );
 };
 
 export const createManualLifeSaveOperationGuard = () => {

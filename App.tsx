@@ -151,20 +151,26 @@ import {
   type InitialAppLoadState,
 } from "./src/systems/appSaveLifecycle";
 import {
-  askPartnerForSpace,
-  bickerWithPartner,
-  breakUpOrDivorcePartner,
+  applyLoadedHousehold,
+  buildLoadedAppPartnerActionHandlers,
+  resolveCurrentPartnerContext,
+  runAskPartnerForSpaceAction,
+  runBickerWithPartnerAction,
+  runBreakUpOrDivorceAction,
+  runConfrontPartnerAboutCurrentIssueAction,
+  runPartnerConversationAction,
+  runPartnerDateAction,
+  runSpendTimeWithPartnerAction,
+} from "./src/systems/partnerActionRuntime";
+import {
   buildFriendFromClassmate,
   getActiveRomanticRelationship,
   getExRelationshipSummaries,
   getAvailablePartnerConflictIssues,
   getAvailablePartnerConversationTopics,
   getActiveRomanticRelationshipBetween,
-  haveConversationAbout,
-  goOnDate,
   goOnDateWithMatch,
   getRelationshipLabel,
-  spendTimeTogether,
 } from "./src/systems/relationships";
 import {
   createProposalSubmissionGuard,
@@ -198,6 +204,7 @@ import type {
   Classmate,
   DatingProfile,
   PartnerBoundaryConversationTopic,
+  PartnerConversationTopic,
   PartnerDateCategory,
   ProposalPlan,
 } from "./src/types/relationships";
@@ -295,9 +302,12 @@ const isDatingAppScreen = (screen: AppScreen) =>
 export default function App() {
   const [initialAppState, setInitialAppState] = useState<InitialAppLoadState | null>(null);
   const [hasFinishedInitialLoad, setHasFinishedInitialLoad] = useState(false);
+  const [initialLoadAttempt, setInitialLoadAttempt] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
+    setHasFinishedInitialLoad(false);
+    setInitialAppState(null);
 
     void (async () => {
       const loadedState = await loadInitialAppState(buildHousehold);
@@ -312,13 +322,33 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [initialLoadAttempt]);
 
   if (!hasFinishedInitialLoad || initialAppState === null) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
           <Text style={styles.screenTitle}>Loading…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!initialAppState.success) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.screenTitle}>Save Data Unavailable</Text>
+          <Text style={styles.recoveryText}>
+            Dynasties could not access your saved lives. Your existing saves may still be
+            safe. Please restart the app and try again.
+          </Text>
+          <Pressable
+            onPress={() => setInitialLoadAttempt((current) => current + 1)}
+            style={styles.innerBox}
+          >
+            <Text>Retry</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -337,7 +367,7 @@ function LoadedApp({
   initialAppState,
 }: {
   hasFinishedInitialLoad: boolean;
-  initialAppState: InitialAppLoadState;
+  initialAppState: Extract<InitialAppLoadState, { success: true }>;
 }) {
   const datingPreferencesDraftCharacterIdRef = useRef<string | null>(null);
   const processingDatingProfileIdRef = useRef<string | null>(null);
@@ -645,7 +675,15 @@ function LoadedApp({
   const refreshManualLifeSlots = async () => {
     const result = await getManualLifeSaves();
     if (!result.success) {
-      Alert.alert("Save Life", `Your saved lives could not be read.\n\n${result.error}`);
+      Alert.alert("Save Life", "Your saved lives could not be read.", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Retry",
+          onPress: () => {
+            void refreshManualLifeSlots();
+          },
+        },
+      ]);
       return;
     }
 
@@ -1351,7 +1389,7 @@ function LoadedApp({
 
   const confirmLoadLifeFromSlot = (slotId: ManualSaveSlotId) => {
     const slot = manualLifeSlots.find((entry) => entry.slotId === slotId);
-    if (!slot?.summary) {
+    if (!slot?.summary || slot.status !== "available") {
       return;
     }
 
@@ -1370,8 +1408,11 @@ function LoadedApp({
                 return;
               }
 
-              latestHouseholdRef.current = result.household;
-              setHousehold(result.household);
+              applyLoadedHousehold({
+                household: result.household,
+                latestHouseholdRef,
+                setHousehold,
+              });
               closeAllPanels();
               setSelectedExRelationshipId(null);
               setCurrentScreen("home");
@@ -1385,7 +1426,7 @@ function LoadedApp({
 
   const confirmDeleteLifeSave = (slotId: ManualSaveSlotId) => {
     const slot = manualLifeSlots.find((entry) => entry.slotId === slotId);
-    if (!slot?.summary) {
+    if (!slot?.summary || slot.status !== "available") {
       return;
     }
 
@@ -1460,18 +1501,21 @@ function LoadedApp({
           {scoreText("Career Ceiling", currentCharacter.partner.careerCeiling)}
         </Text>
         <Pressable
-          onPress={() => setPartnerActionsVisible((value) => !value)}
+          onPress={partnerActionHandlers.togglePartnerActions}
           style={styles.innerBox}
         >
           <Text>Actions</Text>
         </Pressable>
         {partnerActionsVisible ? (
           <View style={styles.detailBox}>
-            <Pressable onPress={spendTimeWithPartner} style={styles.innerBox}>
+            <Pressable
+              onPress={partnerActionHandlers.spendTimeWithPartner}
+              style={styles.innerBox}
+            >
               <Text>Spend Time Together</Text>
             </Pressable>
             <Pressable
-              onPress={() => setGoOnDateVisible((value) => !value)}
+              onPress={partnerActionHandlers.toggleGoOnDateMenu}
               style={styles.innerBox}
             >
               <Text>Go on a Date</Text>
@@ -1479,25 +1523,25 @@ function LoadedApp({
             {goOnDateVisible ? (
               <View style={styles.detailBox}>
                 <Pressable
-                  onPress={() => goOnDateWithPartner("free")}
+                  onPress={() => partnerActionHandlers.goOnDateWithPartner("free")}
                   style={styles.innerBox}
                 >
                   <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => goOnDateWithPartner("cheap")}
+                  onPress={() => partnerActionHandlers.goOnDateWithPartner("cheap")}
                   style={styles.innerBox}
                 >
                   <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => goOnDateWithPartner("fun")}
+                  onPress={() => partnerActionHandlers.goOnDateWithPartner("fun")}
                   style={styles.innerBox}
                 >
                   <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => goOnDateWithPartner("expensive")}
+                  onPress={() => partnerActionHandlers.goOnDateWithPartner("expensive")}
                   style={styles.innerBox}
                 >
                   <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
@@ -1505,7 +1549,7 @@ function LoadedApp({
               </View>
             ) : null}
             <Pressable
-              onPress={() => setConversationVisible((value) => !value)}
+              onPress={partnerActionHandlers.toggleConversationMenu}
               style={styles.innerBox}
             >
               <Text>Have a Conversation About…</Text>
@@ -1514,7 +1558,7 @@ function LoadedApp({
               <View style={styles.detailBox}>
                 {availableConversationTopics.includes("children") ? (
                   <Pressable
-                    onPress={() => haveConversationWithPartner("children")}
+                    onPress={() => partnerActionHandlers.haveConversationWithPartner("children")}
                     style={styles.innerBox}
                   >
                     <Text>Children</Text>
@@ -1522,7 +1566,7 @@ function LoadedApp({
                 ) : null}
                 {availableConversationTopics.includes("marriage") ? (
                   <Pressable
-                    onPress={() => haveConversationWithPartner("marriage")}
+                    onPress={() => partnerActionHandlers.haveConversationWithPartner("marriage")}
                     style={styles.innerBox}
                   >
                     <Text>Marriage</Text>
@@ -1530,7 +1574,9 @@ function LoadedApp({
                 ) : null}
                 {availableConversationTopics.includes("moving_in") ? (
                   <Pressable
-                    onPress={() => haveConversationWithPartner("moving_in")}
+                    onPress={() =>
+                      partnerActionHandlers.haveConversationWithPartner("moving_in")
+                    }
                     style={styles.innerBox}
                   >
                     <Text>Moving In Together</Text>
@@ -1539,7 +1585,7 @@ function LoadedApp({
                 {availableConversationTopics.includes("boundaries") ? (
                   <>
                     <Pressable
-                      onPress={() => setBoundaryConversationVisible((value) => !value)}
+                      onPress={partnerActionHandlers.toggleBoundaryConversationMenu}
                       style={styles.innerBox}
                     >
                       <Text>Boundaries</Text>
@@ -1548,7 +1594,7 @@ function LoadedApp({
                       <View style={styles.detailBox}>
                         <Pressable
                           onPress={() =>
-                            haveConversationWithPartner(
+                            partnerActionHandlers.haveConversationWithPartner(
                               "boundaries",
                               "staying_close_with_an_ex"
                             )
@@ -1559,7 +1605,7 @@ function LoadedApp({
                         </Pressable>
                         <Pressable
                           onPress={() =>
-                            haveConversationWithPartner(
+                            partnerActionHandlers.haveConversationWithPartner(
                               "boundaries",
                               "closed_vs_open_relationship"
                             )
@@ -1575,7 +1621,7 @@ function LoadedApp({
               </View>
             ) : null}
             <Pressable
-              onPress={() => setMajorDecisionsVisible((value) => !value)}
+              onPress={partnerActionHandlers.toggleMajorDecisionsMenu}
               style={styles.innerBox}
             >
               <Text>Major Decisions</Text>
@@ -1583,27 +1629,27 @@ function LoadedApp({
             {majorDecisionsVisible ? (
               <View style={styles.detailBox}>
                 <Pressable
-                  onPress={() => showWipAlert("Move in Together")}
+                  onPress={partnerActionHandlers.moveInTogether}
                   style={styles.innerBox}
                 >
                   <Text>Move in Together - WIP</Text>
                 </Pressable>
                 {canOpenProposalPlanning ? (
                   <Pressable
-                    onPress={openProposalPlanning}
+                    onPress={partnerActionHandlers.openProposalPlanning}
                     style={styles.innerBox}
                   >
                     <Text>Propose</Text>
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => showWipAlert("Try for a Baby")}
+                  onPress={partnerActionHandlers.tryForBaby}
                   style={styles.innerBox}
                 >
                   <Text>Try for a Baby - WIP</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => showWipAlert("Purchase a Property Together")}
+                  onPress={partnerActionHandlers.purchasePropertyTogether}
                   style={styles.innerBox}
                 >
                   <Text>Purchase a Property Together - WIP</Text>
@@ -1611,13 +1657,13 @@ function LoadedApp({
                 {isEngagedWithPartner ? (
                   <>
                     <Pressable
-                      onPress={() => showWipAlert("Plan Wedding")}
+                      onPress={partnerActionHandlers.planWedding}
                       style={styles.innerBox}
                     >
                       <Text>Plan Wedding - WIP</Text>
                     </Pressable>
                     <Pressable
-                      onPress={() => showWipAlert("Elope")}
+                      onPress={partnerActionHandlers.elope}
                       style={styles.innerBox}
                     >
                       <Text>Elope - WIP</Text>
@@ -1627,13 +1673,13 @@ function LoadedApp({
                 {isMarriedToPartner ? (
                   <>
                     <Pressable
-                      onPress={() => showWipAlert("Combine Finances")}
+                      onPress={partnerActionHandlers.combineFinances}
                       style={styles.innerBox}
                     >
                       <Text>Combine Finances</Text>
                     </Pressable>
                     <Pressable
-                      onPress={() => showWipAlert("Separate Finances")}
+                      onPress={partnerActionHandlers.separateFinances}
                       style={styles.innerBox}
                     >
                       <Text>Separate Finances</Text>
@@ -1643,7 +1689,7 @@ function LoadedApp({
               </View>
             ) : null}
             <Pressable
-              onPress={() => setConflictVisible((value) => !value)}
+              onPress={partnerActionHandlers.toggleConflictMenu}
               style={styles.innerBox}
             >
               <Text>Conflict</Text>
@@ -1652,32 +1698,32 @@ function LoadedApp({
               <View style={styles.detailBox}>
                 <Pressable
                   disabled={availableConflictIssues.length === 0}
-                  onPress={undefined}
+                  onPress={partnerActionHandlers.confrontCurrentPartnerAboutIssue}
                   style={styles.innerBox}
                 >
                   <Text>Confront About…</Text>
                 </Pressable>
                 <Pressable
-                  onPress={askPartnerForSpaceAction}
+                  onPress={partnerActionHandlers.askPartnerForSpaceAction}
                   style={styles.innerBox}
                 >
                   <Text>Ask for Space</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => showWipAlert("Ask them to Move Out")}
+                  onPress={partnerActionHandlers.askPartnerToMoveOut}
                   style={styles.innerBox}
                 >
                   <Text>Ask them to Move Out - WIP</Text>
                 </Pressable>
                 <Pressable
-                  onPress={bickerWithCurrentPartner}
+                  onPress={partnerActionHandlers.bickerWithPartnerAction}
                   style={styles.innerBox}
                 >
                   <Text>Bicker</Text>
                 </Pressable>
                 {isDatingPartner || isEngagedWithPartner ? (
                   <Pressable
-                    onPress={breakUpOrDivorceCurrentPartner}
+                    onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
                     style={styles.innerBox}
                   >
                     <Text>Break Up</Text>
@@ -1685,7 +1731,7 @@ function LoadedApp({
                 ) : null}
                 {isMarriedToPartner ? (
                   <Pressable
-                    onPress={breakUpOrDivorceCurrentPartner}
+                    onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
                     style={styles.innerBox}
                   >
                     <Text>Divorce</Text>
@@ -2182,6 +2228,8 @@ function LoadedApp({
                       <Text>{`Relationship Status: ${slot.summary.relationshipStatus}`}</Text>
                     ) : null}
                   </View>
+                ) : slot.status === "corrupted" ? (
+                  <Text>Saved life unavailable</Text>
                 ) : (
                   <Text>Empty Slot</Text>
                 )}
@@ -2196,7 +2244,7 @@ function LoadedApp({
                   </Text>
                 </Pressable>
 
-                {slot.summary ? (
+                {slot.status === "available" && slot.summary ? (
                   <>
                     <Pressable
                       disabled={slotBusy}
@@ -3158,152 +3206,73 @@ function LoadedApp({
   };
 
   const spendTimeWithPartner = () => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
-      );
-      if (!currentCharacter?.partner?.personId) {
-        Alert.alert("Romance", "You do not currently have a partner.");
-        return currentHousehold;
-      }
-
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        Alert.alert("Romance", "Your partner could not be found.");
-        return currentHousehold;
-      }
-
-      const interaction = spendTimeTogether(currentCharacter, partnerCharacter);
-      if (!interaction) {
-        Alert.alert("Romance", "You cannot spend time together right now.");
-        return currentHousehold;
-      }
-
+    const result = runSpendTimeWithPartnerAction(latestHouseholdRef.current);
+    if (!result.success) {
       Alert.alert(
-        "Romance",
-        `${interaction.result.text}\n\nFriendship +${interaction.result.friendshipChange}\nRomance +${interaction.result.romanceChange}`
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
       );
+      return;
+    }
 
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === interaction.person.id
-            ? interaction.person
-            : character.id === interaction.otherPerson.id
-              ? interaction.otherPerson
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
+    Alert.alert("Romance", result.message);
   };
 
   const goOnDateWithPartner = (category: PartnerDateCategory) => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
-      );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
-      }
-
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
-      }
-
-      const result = goOnDate(
-        currentCharacter,
-        partnerCharacter,
-        category,
-        currentHousehold.currentYear
-      );
-      if (!result) {
-        return currentHousehold;
-      }
-
-      if (!result.success) {
-        Alert.alert("Go on a Date", result.text);
-        return currentHousehold;
-      }
-
+    const result = runPartnerDateAction(latestHouseholdRef.current, category);
+    if (!result.success) {
       Alert.alert(
-        "Go on a Date",
-        `${result.result.text}\n\n${formatMoney(
-          result.result.costGBP,
-          currentHousehold.country
-        )}\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}`
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Go on a Date",
+        result.message
       );
+      return;
+    }
 
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === result.person.id
-            ? result.person
-            : character.id === result.otherPerson.id
-              ? result.otherPerson
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
+    if (result.closeDateMenu) {
+      setGoOnDateVisible(false);
+    }
+    Alert.alert("Go on a Date", result.message);
   };
 
   const haveConversationWithPartner = (
-    topic: "children" | "marriage" | "moving_in" | "boundaries" | "recent_life_event",
+    topic: PartnerConversationTopic,
     boundaryTopic?: PartnerBoundaryConversationTopic
   ) => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
-      );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
-      }
-
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
-      }
-
-      const result = haveConversationAbout(
-        currentCharacter,
-        partnerCharacter,
-        topic,
-        currentHousehold.currentYear,
-        {
-          livesTogether:
-            currentHousehold.house.residentIds.includes(currentCharacter.id) &&
-            currentHousehold.house.residentIds.includes(partnerCharacter.id),
-        },
-        boundaryTopic
-      );
-      if (!result) {
-        return currentHousehold;
-      }
-
+    const result = runPartnerConversationAction(
+      latestHouseholdRef.current,
+      topic,
+      boundaryTopic
+    );
+    if (!result.success) {
       Alert.alert(
-        "Romance",
-        `${result.result.text}\n\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}\nDiary: ${
-          result.result.diaryEntryCreated ? "Yes" : "No"
-        }\nMemory: ${result.result.memoryCreated ? "Yes" : "No"}`
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
       );
+      if (result.closeBoundaryMenu) {
+        setBoundaryConversationVisible(false);
+      }
+      return;
+    }
 
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === result.person.id
-            ? result.person
-            : character.id === result.otherPerson.id
-              ? result.otherPerson
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
+    if (result.closeBoundaryMenu) {
+      setBoundaryConversationVisible(false);
+    }
+    Alert.alert("Romance", result.message);
   };
 
   const showWipAlert = (title: string) => {
@@ -3318,6 +3287,27 @@ function LoadedApp({
   }
 
   function openProposalPlanning() {
+    const currentHousehold = latestHouseholdRef.current;
+    const context = resolveCurrentPartnerContext(currentHousehold);
+    const currentRelationship = context.success
+      ? getActiveRomanticRelationshipBetween(
+          context.currentCharacter,
+          context.partnerCharacter.id
+        ) ??
+        getActiveRomanticRelationshipBetween(
+          context.partnerCharacter,
+          context.currentCharacter.id
+        )
+      : null;
+
+    if (!context.success || currentRelationship?.currentStatus !== "Dating") {
+      Alert.alert(
+        context.success ? "Romance" : "Partner Unavailable",
+        "You cannot propose right now."
+      );
+      return;
+    }
+
     if (!canOpenProposalPlanning) {
       Alert.alert("Romance", "You cannot propose right now.");
       return;
@@ -3392,120 +3382,102 @@ function LoadedApp({
   }
 
   const askPartnerForSpaceAction = () => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
+    const result = runAskPartnerForSpaceAction(latestHouseholdRef.current);
+    if (!result.success) {
+      Alert.alert(
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
       );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
-      }
+      return;
+    }
 
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
-      }
-
-      const result = askPartnerForSpace(
-        currentCharacter,
-        partnerCharacter,
-        currentHousehold.currentYear
-      );
-      if (!result) {
-        return currentHousehold;
-      }
-
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === result.person.id
-            ? result.person
-            : character.id === result.otherPerson.id
-              ? result.otherPerson
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
   };
 
-  const bickerWithCurrentPartner = () => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
+  const bickerWithPartnerAction = () => {
+    const result = runBickerWithPartnerAction(latestHouseholdRef.current);
+    if (!result.success) {
+      Alert.alert(
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
       );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
-      }
+      return;
+    }
 
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
-      }
-
-      const result = bickerWithPartner(currentCharacter, partnerCharacter);
-      if (!result) {
-        return currentHousehold;
-      }
-
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === result.person.id
-            ? result.person
-            : character.id === result.otherPerson.id
-              ? result.otherPerson
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
   };
 
   const breakUpOrDivorceCurrentPartner = () => {
-    setHousehold((currentHousehold) => {
-      const currentCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentHousehold.currentCharacterId
+    const result = runBreakUpOrDivorceAction(latestHouseholdRef.current);
+    if (!result.success) {
+      Alert.alert(
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
       );
-      if (!currentCharacter?.partner?.personId) {
-        return currentHousehold;
-      }
+      return;
+    }
 
-      const partnerCharacter = currentHousehold.characters.find(
-        (character) => character.id === currentCharacter.partner?.personId
-      );
-      if (!partnerCharacter) {
-        return currentHousehold;
-      }
-
-      const result = breakUpOrDivorcePartner(
-        currentCharacter,
-        partnerCharacter,
-        currentHousehold.currentYear
-      );
-      if (!result) {
-        return currentHousehold;
-      }
-
-      return {
-        ...currentHousehold,
-        characters: currentHousehold.characters.map((character) =>
-          character.id === result.person.id
-            ? {
-                ...result.person,
-                partner: null,
-              }
-            : character.id === result.otherPerson.id
-              ? {
-                  ...result.otherPerson,
-                  partner: null,
-                }
-              : character
-        ),
-      };
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
     });
   };
+
+  const confrontCurrentPartnerAboutIssue = () => {
+    const result = runConfrontPartnerAboutCurrentIssueAction(
+      latestHouseholdRef.current,
+      availableConflictIssues[0]?.id ?? null
+    );
+    if (!result.success) {
+      Alert.alert(
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
+      );
+      return;
+    }
+
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
+    });
+    Alert.alert("Romance", result.message);
+  };
+
+  const partnerActionHandlers = buildLoadedAppPartnerActionHandlers({
+    togglePartnerActions: () => setPartnerActionsVisible((value) => !value),
+    spendTimeWithPartner,
+    toggleGoOnDateMenu: () => setGoOnDateVisible((value) => !value),
+    goOnDateWithPartner,
+    toggleConversationMenu: () => setConversationVisible((value) => !value),
+    haveConversationWithPartner,
+    toggleBoundaryConversationMenu: () =>
+      setBoundaryConversationVisible((value) => !value),
+    toggleMajorDecisionsMenu: () => setMajorDecisionsVisible((value) => !value),
+    openProposalPlanning,
+    moveInTogether: () => showWipAlert("Move in Together"),
+    tryForBaby: () => showWipAlert("Try for a Baby"),
+    purchasePropertyTogether: () => showWipAlert("Purchase a Property Together"),
+    planWedding: () => showWipAlert("Plan Wedding"),
+    elope: () => showWipAlert("Elope"),
+    combineFinances: () => showWipAlert("Combine Finances"),
+    separateFinances: () => showWipAlert("Separate Finances"),
+    toggleConflictMenu: () => setConflictVisible((value) => !value),
+    askPartnerForSpaceAction,
+    askPartnerToMoveOut: () => showWipAlert("Ask them to Move Out"),
+    bickerWithPartnerAction,
+    breakUpOrDivorceCurrentPartner,
+    confrontCurrentPartnerAboutIssue,
+  });
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -4124,6 +4096,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    padding: 16,
+    gap: 12,
+  },
+  recoveryText: {
+    textAlign: "center",
   },
   box: {
     borderWidth: 1,
