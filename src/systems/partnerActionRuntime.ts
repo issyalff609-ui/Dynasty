@@ -6,6 +6,7 @@ import {
   getCharacterResidence,
   getCurrentHouseholdCharacter,
 } from "./household";
+import { areCharactersLivingTogether } from "./residence";
 import {
   moveCharactersIntoResidence,
   relocateCharacterAfterMoveOut,
@@ -214,9 +215,11 @@ export const resolveCurrentPartnerContext = (
     success: true,
     currentCharacter,
     partnerCharacter,
-    livesTogether:
-      getCharacterResidence(household, currentCharacter.id)?.id ===
-      getCharacterResidence(household, partnerCharacter.id)?.id,
+    livesTogether: areCharactersLivingTogether(
+      household,
+      currentCharacter,
+      partnerCharacter
+    ),
   };
 };
 

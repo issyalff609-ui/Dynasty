@@ -1,5 +1,6 @@
 import React from "react";
 import { Image, Pressable, SafeAreaView, ScrollView, View } from "react-native";
+import type { ImageStyle, StyleProp } from "react-native";
 import { DatingBottomNavigation, type DatingScreenStyles } from "./shared";
 import { AppText as Text } from "../../components/AppText";
 import type { Gender, Race } from "../../types/person";
@@ -98,7 +99,7 @@ export function DatingProfileScreen({
           {playerProfilePhotoSource ? (
             <Image
               source={playerProfilePhotoSource}
-              style={styles.profilePhoto}
+              style={styles.profilePhoto as StyleProp<ImageStyle>}
               resizeMode="cover"
             />
           ) : (

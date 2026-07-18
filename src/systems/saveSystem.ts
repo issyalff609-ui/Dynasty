@@ -14,6 +14,7 @@ import {
   DEFAULT_PROPERTY_CONDITION,
   getCurrentHouseholdCharacter,
 } from "./household";
+import { validateHouseholdIntegrity } from "./householdIntegrity";
 import {
   createPropertyMarket,
   getFamilyHomePropertyId,
@@ -1130,14 +1131,15 @@ export const hydrateHousehold = (household: Household): Household => {
     };
   });
 
-  if (!changed) {
-    return repairHouseholdRomanticRelationships(householdWithHydratedCharacters);
-  }
+  const repairedHousehold = !changed
+    ? repairHouseholdRomanticRelationships(householdWithHydratedCharacters)
+    : repairHouseholdRomanticRelationships({
+        ...householdWithHydratedCharacters,
+        characters,
+      });
 
-  return repairHouseholdRomanticRelationships({
-    ...householdWithHydratedCharacters,
-    characters,
-  });
+  reportHouseholdIntegrityInDev(repairedHousehold, "hydration");
+  return repairedHousehold;
 };
 
 const isGameSave = (value: unknown): value is GameSave =>
@@ -1299,6 +1301,38 @@ const isDevelopmentRuntime = () =>
   (globalThis as { __DEV__?: boolean }).__DEV__ === true ||
   (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env?.NODE_ENV !==
     "production";
+
+const reportHouseholdIntegrityInDev = (
+  household: Household,
+  scope: "hydration" | "save"
+) => {
+  if (!isDevelopmentRuntime()) {
+    return {
+      ok: true,
+      message: null,
+    };
+  }
+
+  const report = validateHouseholdIntegrity(household);
+  if (report.warnings.length > 0) {
+    console.warn(`[saveSystem] ${scope} warnings: ${report.warnings.join(" | ")}`);
+  }
+
+  if (report.errors.length === 0) {
+    return {
+      ok: true,
+      message: null,
+    };
+  }
+
+  const message = report.errors.join(" | ");
+  console.error(`[saveSystem] ${scope} integrity errors: ${message}`);
+
+  return {
+    ok: false,
+    message,
+  };
+};
 
 const buildStorageOperationDetail = ({
   backend,
@@ -1716,6 +1750,14 @@ export const saveHouseholdToStorage = async (
         };
       }
 
+      const integrity = reportHouseholdIntegrityInDev(household, "save");
+      if (!integrity.ok) {
+        return {
+          success: false,
+          error: `Your life could not be saved. ${integrity.message}`,
+        };
+      }
+
       let serializedSave: string;
       try {
         serializedSave = JSON.stringify(buildGameSave(household));
@@ -1840,6 +1882,14 @@ export const saveLifeToSlot = async (
         return {
           success: false,
           error: "The current life could not be saved.",
+        };
+      }
+
+      const integrity = reportHouseholdIntegrityInDev(household, "save");
+      if (!integrity.ok) {
+        return {
+          success: false,
+          error: `The current life could not be saved. ${integrity.message}`,
         };
       }
 

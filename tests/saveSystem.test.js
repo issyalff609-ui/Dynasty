@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
@@ -587,7 +588,7 @@ test("storage adapter initialisation errors are not treated as an empty save", a
 
 test("AsyncStorage import is not dynamically swallowed", () => {
   const source = fs.readFileSync(
-    "/Users/isabellealff/Documents/Dynasties/src/systems/saveSystem.ts",
+    path.resolve(process.cwd(), "src/systems/saveSystem.ts"),
     "utf8"
   );
 

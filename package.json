@@ -8,7 +8,9 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "rm -rf .tmp-tests && npx tsc -p tsconfig.test.json && node tests/setupTestRuntime.cjs && node --test tests/*.test.js"
+    "typecheck": "tsc --noEmit",
+    "test": "node -e \"require('node:fs').rmSync('.tmp-tests', { recursive: true, force: true })\" && npx tsc -p tsconfig.test.json && node tests/setupTestRuntime.cjs && node --test tests/*.test.js",
+    "check": "npm run typecheck && npm test"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

@@ -31,6 +31,7 @@ import {
   syncPersonAge,
 } from "../systems/person";
 import { getCharacterResidence } from "./household";
+import { areCharactersLivingTogether } from "./residence";
 import {
   applyRelationshipScoreDelta,
   clearRelationshipSpaceStatus,
@@ -323,10 +324,11 @@ const applyAnnualSeparateLivingEffects = (
 
       const personResidence = getCharacterResidence(nextHousehold, person.id);
       const otherResidence = getCharacterResidence(nextHousehold, otherPerson.id);
-      const livesTogether =
-        personResidence !== null &&
-        otherResidence !== null &&
-        personResidence.id === otherResidence.id;
+      const livesTogether = areCharactersLivingTogether(
+        nextHousehold,
+        person,
+        otherPerson
+      );
 
       if (livesTogether) {
         const [togetherPerson, togetherOtherPerson] = clearRelationshipSpaceStatus(

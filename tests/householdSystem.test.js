@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
@@ -40,7 +41,7 @@ const {
 const { hydrateHousehold } = require("../.tmp-tests/src/systems/saveSystem.js");
 
 const CURRENT_YEAR = 2026;
-const APP_SOURCE_PATH = "/Users/isabellealff/Documents/Dynasties/App.tsx";
+const APP_SOURCE_PATH = path.resolve(process.cwd(), "App.tsx");
 
 const buildCharacter = ({
   id,
@@ -833,12 +834,20 @@ test("calculateHouseholdOvercrowding and housing mood use the active character r
 });
 
 test("App home panel still renders ownership and resident sections after the property migration", () => {
-  const source = fs.readFileSync(APP_SOURCE_PATH, "utf8");
+  const appSource = fs.readFileSync(APP_SOURCE_PATH, "utf8");
+  const assetsHubSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/screens/AssetsHubScreen.tsx"),
+    "utf8",
+  );
+  const housePanelSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/components/housing/HousePanel.tsx"),
+    "utf8",
+  );
 
-  assert.match(source, /Owned by/);
-  assert.match(source, /Residents/);
-  assert.match(source, /Browse Properties/);
-  assert.match(source, /Housing/);
-  assert.match(source, /currentResidence\.ownerIds/);
-  assert.match(source, /getCurrentHouseholdProperty/);
+  assert.match(housePanelSource, /Owned by/);
+  assert.match(housePanelSource, /Residents/);
+  assert.match(assetsHubSource, /Browse Properties/);
+  assert.match(assetsHubSource, /Housing/);
+  assert.match(housePanelSource, /currentResidence\.ownerIds/);
+  assert.match(appSource, /getCurrentHouseholdProperty/);
 });

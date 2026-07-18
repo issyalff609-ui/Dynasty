@@ -19,7 +19,7 @@ export const CharacterHeader = ({
     <Pressable onPress={onPress} style={styles.box}>
       <Text variant="buttonText">{headerLabel}</Text>
     </Pressable>
-    <Text variant="sectionTitle" weight="semiBold">{sectionLabel}</Text>
+    <Text variant="sectionTitle" weight="semibold">{sectionLabel}</Text>
     <Text variant="smallText" weight="medium">{summary}</Text>
   </>
 );

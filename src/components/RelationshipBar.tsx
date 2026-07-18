@@ -21,7 +21,7 @@ export const RelationshipBar = ({
   value,
 }: RelationshipBarProps) => {
   const clampedValue = clampValue(value, minValue, maxValue);
-  const fillWidth = `${
+  const fillWidth: `${number}%` = `${
     fillColor === "pink"
       ? (clampedValue / Math.max(maxValue, 1)) * 100
       : (Math.abs(clampedValue) / Math.max(Math.abs(minValue), Math.abs(maxValue), 1)) * 100

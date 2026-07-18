@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
@@ -44,7 +45,7 @@ const {
 } = require("../.tmp-tests/src/systems/property.js");
 
 const CURRENT_YEAR = 2026;
-const APP_SOURCE_PATH = "/Users/isabellealff/Documents/Dynasties/App.tsx";
+const APP_SOURCE_PATH = path.resolve(process.cwd(), "App.tsx");
 
 class LocalStorageMock {
   constructor() {

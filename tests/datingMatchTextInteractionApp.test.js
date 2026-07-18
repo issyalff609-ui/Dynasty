@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const { createCharacter } = require("../.tmp-tests/src/generators/characterGenerator.js");
@@ -22,7 +23,7 @@ const {
 } = require("../.tmp-tests/src/systems/datingActions.js");
 
 const CURRENT_YEAR = 2026;
-const APP_SOURCE_PATH = "/Users/isabellealff/Documents/Dynasties/App.tsx";
+const APP_SOURCE_PATH = path.resolve(process.cwd(), "App.tsx");
 
 class LocalStorageMock {
   constructor() {
@@ -196,9 +197,12 @@ const buildHousehold = () => {
 };
 
 test("App text interaction handler keeps the resolver, null guard, latest-household commit, and real score display wiring", () => {
-  const source = fs.readFileSync(APP_SOURCE_PATH, "utf8");
-  const start = source.indexOf("const interactWithMatch = (matchId: string) => {");
-  const end = source.indexOf("const goOnDateWithSelectedMatch =");
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), "src/hooks/useGameActions.ts"),
+    "utf8",
+  );
+  const start = source.indexOf("interactWithMatch(matchId: string) {");
+  const end = source.indexOf("goOnDateWithSelectedMatch(category: PartnerDateCategory) {");
   const handlerSource = source.slice(start, end);
 
   assert.match(handlerSource, /resolveDatingMatchTextInteraction\(\{/);
