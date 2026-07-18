@@ -430,6 +430,7 @@ export const promoteNpcToPerson = (
       birthYear,
     }),
     recentRelationshipLifeEvents: [],
+    conversationTopicViews: {},
   };
 
   return {

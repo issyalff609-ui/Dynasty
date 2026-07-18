@@ -20,13 +20,24 @@ import {
   shouldFriendGoToHigherEducation,
 } from "../systems/education";
 import { recalculateHouseholdFinance, getTaxSummary } from "../systems/finances";
-import { createPropertyMarket, processAnnualMortgagePayments } from "../systems/property";
+import {
+  createPropertyMarket,
+  processAnnualMortgagePayments,
+  relocateCharacterAfterMoveOut,
+} from "../systems/property";
 import {
   getPersonAge,
   syncLinkedSocialRecordsFromPeople,
   syncPersonAge,
 } from "../systems/person";
-import { syncFriendFromClassmate } from "../systems/relationships";
+import { getCharacterResidence } from "./household";
+import {
+  applyRelationshipScoreDelta,
+  clearRelationshipSpaceStatus,
+  getActiveRomanticRelationshipBetween,
+  MOVE_OUT_YEARLY_PENALTIES,
+  syncFriendFromClassmate,
+} from "../systems/relationships";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
 import type { Friend } from "../types/relationships";
@@ -279,6 +290,120 @@ export const ageCharacterOneYear = (
   return nextCharacter;
 };
 
+const applyAnnualSeparateLivingEffects = (
+  household: Household,
+  nextYear: number
+): Household => {
+  let nextHousehold = household;
+  const processedRelationshipIds = new Set<string>();
+
+  for (const character of nextHousehold.characters) {
+    for (const relationship of character.romanticRelationships) {
+      if (
+        processedRelationshipIds.has(relationship.id) ||
+        !relationship.spaceStatus?.active ||
+        relationship.currentStatus === "Ended" ||
+        !relationship.spaceStatus.moveOutStatus
+      ) {
+        continue;
+      }
+
+      processedRelationshipIds.add(relationship.id);
+      const otherPerson =
+        nextHousehold.characters.find((item) => item.id === relationship.personId) ?? null;
+      if (!otherPerson) {
+        continue;
+      }
+
+      const person =
+        nextHousehold.characters.find((item) => item.id === character.id) ?? null;
+      if (!person) {
+        continue;
+      }
+
+      const personResidence = getCharacterResidence(nextHousehold, person.id);
+      const otherResidence = getCharacterResidence(nextHousehold, otherPerson.id);
+      const livesTogether =
+        personResidence !== null &&
+        otherResidence !== null &&
+        personResidence.id === otherResidence.id;
+
+      if (livesTogether) {
+        const [togetherPerson, togetherOtherPerson] = clearRelationshipSpaceStatus(
+          person,
+          otherPerson
+        );
+        nextHousehold = {
+          ...nextHousehold,
+          characters: nextHousehold.characters.map((item) =>
+            item.id === togetherPerson.id
+              ? togetherPerson
+              : item.id === togetherOtherPerson.id
+                ? togetherOtherPerson
+                : item
+          ),
+        };
+        continue;
+      }
+
+      const penaltyConfig = MOVE_OUT_YEARLY_PENALTIES[relationship.spaceStatus.moveOutStatus];
+      const yearsSinceMoveOut = nextYear - relationship.spaceStatus.startedYear;
+      if (
+        penaltyConfig.maxYears !== null &&
+        yearsSinceMoveOut > penaltyConfig.maxYears
+      ) {
+        continue;
+      }
+
+      const friendshipChange = randomInt(
+        penaltyConfig.friendship[0],
+        penaltyConfig.friendship[1]
+      );
+      const romanceChange = randomInt(
+        penaltyConfig.romance[0],
+        penaltyConfig.romance[1]
+      );
+      const [penalizedPerson, penalizedOtherPerson] = applyRelationshipScoreDelta(
+        person,
+        otherPerson,
+        friendshipChange,
+        romanceChange
+      );
+      nextHousehold = {
+        ...nextHousehold,
+        characters: nextHousehold.characters.map((item) =>
+          item.id === penalizedPerson.id
+            ? penalizedPerson
+            : item.id === penalizedOtherPerson.id
+              ? penalizedOtherPerson
+              : item
+        ),
+      };
+
+      const movedOutPersonId = relationship.spaceStatus.movedOutPersonId;
+      const movedOutCharacter =
+        movedOutPersonId
+          ? nextHousehold.characters.find((item) => item.id === movedOutPersonId) ?? null
+          : null;
+      if (
+        movedOutCharacter &&
+        movedOutCharacter.livingSituation.type === "staying_with_person" &&
+        yearsSinceMoveOut >= 1
+      ) {
+        const relocation = relocateCharacterAfterMoveOut({
+          household: nextHousehold,
+          characterId: movedOutCharacter.id,
+          avoidPropertyId: personResidence?.id ?? otherResidence?.id ?? null,
+          allowFriendsCouch: false,
+        });
+        nextHousehold = relocation.household;
+      }
+    }
+  }
+
+  return nextHousehold;
+};
+
 export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
   const agedCharacters = currentHousehold.characters.map((character) =>
     ageCharacterOneYear(
@@ -332,28 +457,32 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
     currentYear: nextYear,
     characters: syncedCharacters,
   });
+  const householdAfterSeparateLivingEffects = applyAnnualSeparateLivingEffects(
+    householdAfterMortgages,
+    nextYear
+  );
 
   const nextNetWorthGBP = Math.max(
     0,
-    householdAfterMortgages.netWorthGBP +
+    householdAfterSeparateLivingEffects.netWorthGBP +
       Math.round(
         recalculateHouseholdFinance(
-          householdAfterMortgages,
-          householdAfterMortgages.characters,
-          householdAfterMortgages.currentCharacterId
+          householdAfterSeparateLivingEffects,
+          householdAfterSeparateLivingEffects.characters,
+          householdAfterSeparateLivingEffects.currentCharacterId
         ).householdIncomeGBP * 0.35
       ) +
       randomInt(-5000, 10000)
   );
   const finance = recalculateHouseholdFinance(
-    householdAfterMortgages,
-    householdAfterMortgages.characters,
-    householdAfterMortgages.currentCharacterId,
+    householdAfterSeparateLivingEffects,
+    householdAfterSeparateLivingEffects.characters,
+    householdAfterSeparateLivingEffects.currentCharacterId,
     nextNetWorthGBP
   );
 
   return {
-    ...householdAfterMortgages,
+    ...householdAfterSeparateLivingEffects,
     currentYear: nextYear,
     propertyMarket: createPropertyMarket(nextYear),
     ...finance,

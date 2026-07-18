@@ -1,6 +1,7 @@
 import type { AcademicPerformanceProfile, Degree } from "./education";
 import type { CareerRecord, FullTimeJobListing, PartTimeJobListing } from "./jobs";
 import type {
+  CharacterConversationTopicViews,
   Classmate,
   DatingProfile,
   Friend,
@@ -264,4 +265,5 @@ export type Person = {
   diary: DiaryEntry[];
   relationshipPreferences: RelationshipPreferences;
   recentRelationshipLifeEvents: RecentRelationshipLifeEvent[];
+  conversationTopicViews: CharacterConversationTopicViews;
 };

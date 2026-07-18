@@ -33,7 +33,56 @@ export type RelationshipBoundaries = {
 export type RelationshipSpaceStatus = {
   active: boolean;
   startedYear: number;
+  moveOutStatus?: "Dating" | "Engaged" | "Married" | null;
+  movedOutPersonId?: string | null;
 };
+
+export type CharacterConversationChildrenView =
+  | "does_not_want"
+  | "unsure"
+  | "wants_later"
+  | "wants_now"
+  | "small_family"
+  | "large_family";
+
+export type CharacterConversationMarriageView =
+  | "does_not_want"
+  | "unsure"
+  | "wants_later"
+  | "wants_now"
+  | "elope"
+  | "big_wedding";
+
+export type CharacterConversationMovingInView =
+  | "not_ready"
+  | "wait_until_marriage"
+  | "wants_later"
+  | "wants_now"
+  | "natural_next_step"
+  | "needs_space"
+  | "worried";
+
+export type CharacterConversationTopicViews = {
+  children?: CharacterConversationChildrenView;
+  marriage?: CharacterConversationMarriageView;
+  moving_in?: CharacterConversationMovingInView;
+};
+
+export type PartnerConversationHistoryRecord = {
+  relationshipId: string;
+  topicId: string;
+  lastDiscussedYear: number;
+};
+
+export type PartnerConversationCompatibility = "compatible" | "incompatible";
+
+export type ConversationView = {
+  key: string;
+  text: string;
+  broadPreference: string;
+};
+
+export type PartnerMoveInOutcome = "accepted" | "hesitant" | "declined";
 
 export type RomanticRelationship = {
   id: string;
@@ -48,18 +97,24 @@ export type RomanticRelationship = {
   endReason: RomanticRelationshipEndReason;
   boundaries?: RelationshipBoundaries;
   spaceStatus?: RelationshipSpaceStatus | null;
+  conversationHistory?: PartnerConversationHistoryRecord[];
 };
 
 export type Memory = {
   id: string;
   text: string;
-  type?: "relationship_boundary" | "proposal";
+  type?: "relationship_boundary" | "proposal" | "partner_conversation";
   boundaryType?: "ex_boundary" | "relationship_style";
   partnerId?: string;
   relationshipId?: string;
-  playerView?: RelationshipBoundaryComfort | RelationshipBoundaryStyle;
-  partnerView?: RelationshipBoundaryComfort | RelationshipBoundaryStyle;
+  topicId?: string;
+  playerView?: string;
+  partnerView?: string;
+  compatibility?: PartnerConversationCompatibility;
+  friendshipChange?: number;
+  romanceChange?: number;
   year?: number;
+  characterIds?: string[];
   proposerId?: string;
   ring?: ProposalRing;
   location?: ProposalLocation;
@@ -184,13 +239,28 @@ export type PartnerBoundaryConversationTopic =
   | "staying_close_with_an_ex"
   | "closed_vs_open_relationship";
 
-export type PartnerConversationResult = {
-  text: string;
-  friendshipChange: number;
-  romanceChange: number;
-  diaryEntryCreated: boolean;
-  memoryCreated: boolean;
-};
+export type PartnerConversationResult =
+  | {
+      status: "resolved";
+      topicId: string;
+      text: string;
+      playerView: ConversationView;
+      partnerView: ConversationView;
+      compatibility: PartnerConversationCompatibility;
+      friendshipChange: number;
+      romanceChange: number;
+      diaryEntryCreated: boolean;
+      memoryCreated: boolean;
+    }
+  | {
+      status: "already_discussed";
+      topicId: string;
+      text: "Already discussed this year";
+      friendshipChange: 0;
+      romanceChange: 0;
+      diaryEntryCreated: false;
+      memoryCreated: false;
+    };
 
 export type ProposalRing =
   | "no_ring"

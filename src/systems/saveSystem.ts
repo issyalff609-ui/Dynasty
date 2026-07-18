@@ -685,11 +685,51 @@ const hydrateCharacter = (
     ? character.proposalHistory
     : [];
   const diary = Array.isArray(character.diary) ? character.diary : [];
+  const deriveRelationshipStartYear = (relationship: {
+    id?: unknown;
+    startYear?: unknown;
+    engagementYear?: unknown;
+    marriageYear?: unknown;
+    endYear?: unknown;
+    boundaries?: { exBoundary?: { yearDiscussed?: unknown }; relationshipStyle?: { yearDiscussed?: unknown } };
+    spaceStatus?: { startedYear?: unknown } | null;
+  }) => {
+    if (isFiniteNumber(relationship.startYear)) {
+      return relationship.startYear;
+    }
+
+    const relationshipId = typeof relationship.id === "string" ? relationship.id : null;
+    const candidateYears = [
+      relationship.engagementYear,
+      relationship.marriageYear,
+      relationship.endYear,
+      relationship.boundaries?.exBoundary?.yearDiscussed,
+      relationship.boundaries?.relationshipStyle?.yearDiscussed,
+      relationship.spaceStatus?.startedYear,
+      ...proposalHistory
+        .filter((proposal) => proposal.relationshipId === relationshipId)
+        .map((proposal) => proposal.year),
+      ...memories
+        .filter((memory) => memory.relationshipId === relationshipId)
+        .map((memory) => memory.year),
+    ].filter(isFiniteNumber);
+
+    return candidateYears.length > 0 ? Math.min(...candidateYears) : 0;
+  };
   const romanticRelationships = Array.isArray(character.romanticRelationships)
     ? character.romanticRelationships.map((relationship) => ({
         ...relationship,
+        startYear: deriveRelationshipStartYear(relationship),
         boundaries: relationship.boundaries ?? {},
         spaceStatus: relationship.spaceStatus ?? null,
+        conversationHistory: Array.isArray(relationship.conversationHistory)
+          ? relationship.conversationHistory.filter(
+              (entry) =>
+                typeof entry?.relationshipId === "string" &&
+                typeof entry?.topicId === "string" &&
+                isFiniteNumber(entry?.lastDiscussedYear)
+            )
+          : [],
       }))
     : [];
   const relationshipPreferences =
@@ -703,6 +743,11 @@ const hydrateCharacter = (
   )
     ? character.recentRelationshipLifeEvents
     : [];
+  const conversationTopicViews =
+    character.conversationTopicViews &&
+    typeof character.conversationTopicViews === "object"
+      ? character.conversationTopicViews
+      : {};
   const datingCandidatePool =
     character.datingCandidatePool &&
     isFiniteNumber(character.datingCandidatePool.year) &&
@@ -771,6 +816,7 @@ const hydrateCharacter = (
       diary,
       relationshipPreferences,
       recentRelationshipLifeEvents,
+      conversationTopicViews,
       romanticRelationships,
       datingCandidatePool,
       datingMatches,
@@ -817,6 +863,7 @@ const hydrateCharacter = (
     character.diary === diary &&
     character.relationshipPreferences === relationshipPreferences &&
     character.recentRelationshipLifeEvents === recentRelationshipLifeEvents &&
+    character.conversationTopicViews === conversationTopicViews &&
     character.romanticRelationships === romanticRelationships &&
     character.datingCandidatePool === resolvedCharacter.datingCandidatePool &&
     character.datingMatches === resolvedCharacter.datingMatches &&
@@ -855,6 +902,7 @@ const hydrateCharacter = (
     diary,
     relationshipPreferences,
     recentRelationshipLifeEvents,
+    conversationTopicViews,
     romanticRelationships,
     datingCandidatePool: resolvedCharacter.datingCandidatePool,
     datingMatches: resolvedCharacter.datingMatches,

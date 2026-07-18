@@ -194,17 +194,21 @@ import {
   runBickerWithPartnerAction,
   runBreakUpOrDivorceAction,
   runConfrontPartnerAboutCurrentIssueAction,
+  runAskPartnerToMoveOutAction,
+  runMoveInTogetherAction,
   runPartnerConversationAction,
   runPartnerDateAction,
   runSpendTimeWithPartnerAction,
 } from "./src/systems/partnerActionRuntime";
 import {
   buildFriendFromClassmate,
+  getActiveRelationshipYearsTogetherBetween,
   getActiveRomanticRelationship,
   getExRelationshipSummaries,
   getAvailablePartnerConflictIssues,
   getAvailablePartnerConversationTopics,
   getActiveRomanticRelationshipBetween,
+  isPartnerConversationTopicDisabled,
   goOnDateWithMatch,
   getRelationshipLabel,
 } from "./src/systems/relationships";
@@ -1053,6 +1057,17 @@ function LoadedApp({
         : [],
     [currentCharacter, household.currentYear, livesTogetherWithPartner, partnerCharacter]
   );
+  const yearsTogetherWithPartner = useMemo(
+    () =>
+      partnerCharacter
+        ? getActiveRelationshipYearsTogetherBetween(
+            currentCharacter,
+            partnerCharacter.id,
+            household.currentYear
+          )
+        : null,
+    [currentCharacter, household.currentYear, partnerCharacter]
+  );
   const availableConflictIssues = useMemo(
     () =>
       partnerCharacter
@@ -1845,6 +1860,11 @@ function LoadedApp({
               currentCharacter.partner.annualIncomeGBP,
               household.country
             )}`}</Text>
+            <Text>{`Housing: ${
+              partnerCharacter
+                ? describeCurrentLivingSituation(household, partnerCharacter.id)
+                : "No current living situation recorded."
+            }`}</Text>
             <Text>{`Race: ${currentCharacter.partner.race}`}</Text>
           </View>
         ) : (
@@ -1879,6 +1899,14 @@ function LoadedApp({
               </Text>
               <Text>{labelList(currentCharacter.partner.traits)}</Text>
             </Text>
+            {yearsTogetherWithPartner !== null ? (
+              <Text>
+                <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                  Years Together:{" "}
+                </Text>
+                <Text>{yearsTogetherWithPartner}</Text>
+              </Text>
+            ) : null}
           </View>
         )}
         <Pressable
@@ -1959,20 +1987,76 @@ function LoadedApp({
                 {availableConversationTopics.includes("children") ? (
                   <Pressable
                     onPress={() => partnerActionHandlers.haveConversationWithPartner("children")}
-                    style={styles.partnerMenuActionButton}
+                    disabled={
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "children",
+                      })
+                    }
+                    style={[
+                      styles.partnerMenuActionButton,
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "children",
+                      })
+                        ? { opacity: 0.5 }
+                        : null,
+                    ]}
                   >
                     <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                      Children
+                      {!!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "children",
+                      })
+                        ? "Children - Already discussed this year"
+                        : "Children"}
                     </Text>
                   </Pressable>
                 ) : null}
                 {availableConversationTopics.includes("marriage") ? (
                   <Pressable
                     onPress={() => partnerActionHandlers.haveConversationWithPartner("marriage")}
-                    style={styles.partnerMenuActionButton}
+                    disabled={
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "marriage",
+                      })
+                    }
+                    style={[
+                      styles.partnerMenuActionButton,
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "marriage",
+                      })
+                        ? { opacity: 0.5 }
+                        : null,
+                    ]}
                   >
                     <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                      Marriage
+                      {!!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "marriage",
+                      })
+                        ? "Marriage - Already discussed this year"
+                        : "Marriage"}
                     </Text>
                   </Pressable>
                 ) : null}
@@ -1981,10 +2065,38 @@ function LoadedApp({
                     onPress={() =>
                       partnerActionHandlers.haveConversationWithPartner("moving_in")
                     }
-                    style={styles.partnerMenuActionButton}
+                    disabled={
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "moving_in",
+                      })
+                    }
+                    style={[
+                      styles.partnerMenuActionButton,
+                      !!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "moving_in",
+                      })
+                        ? { opacity: 0.5 }
+                        : null,
+                    ]}
                   >
                     <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                      Moving In Together
+                      {!!partnerCharacter &&
+                      isPartnerConversationTopicDisabled({
+                        person: currentCharacter,
+                        otherPerson: partnerCharacter,
+                        currentYear: household.currentYear,
+                        topic: "moving_in",
+                      })
+                        ? "Moving In Together - Already discussed this year"
+                        : "Moving In Together"}
                     </Text>
                   </Pressable>
                 ) : null}
@@ -2007,10 +2119,41 @@ function LoadedApp({
                               "staying_close_with_an_ex"
                             )
                           }
-                          style={styles.partnerMenuActionButton}
+                          disabled={
+                            !!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "staying_close_with_an_ex",
+                            })
+                          }
+                          style={[
+                            styles.partnerMenuActionButton,
+                            !!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "staying_close_with_an_ex",
+                            })
+                              ? { opacity: 0.5 }
+                              : null,
+                          ]}
                         >
                           <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                            Staying Close with an Ex
+                            {!!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "staying_close_with_an_ex",
+                            })
+                              ? "Staying Close with an Ex - Already discussed this year"
+                              : "Staying Close with an Ex"}
                           </Text>
                         </Pressable>
                         <Pressable
@@ -2020,10 +2163,41 @@ function LoadedApp({
                               "closed_vs_open_relationship"
                             )
                           }
-                          style={styles.partnerMenuActionButton}
+                          disabled={
+                            !!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "closed_vs_open_relationship",
+                            })
+                          }
+                          style={[
+                            styles.partnerMenuActionButton,
+                            !!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "closed_vs_open_relationship",
+                            })
+                              ? { opacity: 0.5 }
+                              : null,
+                          ]}
                         >
                           <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                            Closed vs Open Relationship
+                            {!!partnerCharacter &&
+                            isPartnerConversationTopicDisabled({
+                              person: currentCharacter,
+                              otherPerson: partnerCharacter,
+                              currentYear: household.currentYear,
+                              topic: "boundaries",
+                              boundaryTopic: "closed_vs_open_relationship",
+                            })
+                              ? "Closed vs Open Relationship - Already discussed this year"
+                              : "Closed vs Open Relationship"}
                           </Text>
                         </Pressable>
                       </View>
@@ -2042,14 +2216,16 @@ function LoadedApp({
             </Pressable>
             {majorDecisionsVisible ? (
               <View style={styles.partnerSubmenu}>
-                <Pressable
-                  onPress={partnerActionHandlers.moveInTogether}
-                  style={styles.partnerMenuActionButton}
-                >
-                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                    Move in Together - WIP
-                  </Text>
-                </Pressable>
+                {!isMarriedToPartner && !livesTogetherWithPartner ? (
+                  <Pressable
+                    onPress={partnerActionHandlers.moveInTogether}
+                    style={styles.partnerMenuActionButton}
+                  >
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Move in Together
+                    </Text>
+                  </Pressable>
+                ) : null}
                 {canOpenProposalPlanning ? (
                   <Pressable
                     onPress={partnerActionHandlers.openProposalPlanning}
@@ -2133,7 +2309,10 @@ function LoadedApp({
                   onPress={partnerActionHandlers.confrontCurrentPartnerAboutIssue}
                   style={styles.partnerMenuActionButton}
                 >
-                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                  <Text
+                    variant="buttonText"
+                    style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                  >
                     Confront About...
                   </Text>
                 </Pressable>
@@ -2141,7 +2320,10 @@ function LoadedApp({
                   onPress={partnerActionHandlers.askPartnerForSpaceAction}
                   style={styles.partnerMenuActionButton}
                 >
-                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                  <Text
+                    variant="buttonText"
+                    style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                  >
                     Ask for Space
                   </Text>
                 </Pressable>
@@ -2149,15 +2331,21 @@ function LoadedApp({
                   onPress={partnerActionHandlers.askPartnerToMoveOut}
                   style={styles.partnerMenuActionButton}
                 >
-                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
-                    Ask them to Move Out - WIP
+                  <Text
+                    variant="buttonText"
+                    style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                  >
+                    Ask them to Move Out
                   </Text>
                 </Pressable>
                 <Pressable
                   onPress={partnerActionHandlers.bickerWithPartnerAction}
                   style={styles.partnerMenuActionButton}
                 >
-                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                  <Text
+                    variant="buttonText"
+                    style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                  >
                     Bicker
                   </Text>
                 </Pressable>
@@ -2166,7 +2354,10 @@ function LoadedApp({
                     onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
                     style={styles.partnerMenuActionButton}
                   >
-                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    <Text
+                      variant="buttonText"
+                      style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                    >
                       Break Up
                     </Text>
                   </Pressable>
@@ -2176,7 +2367,10 @@ function LoadedApp({
                     onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
                     style={styles.partnerMenuActionButton}
                   >
-                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    <Text
+                      variant="buttonText"
+                      style={[styles.partnerActionsButtonText, styles.partnerConflictButtonText]}
+                    >
                       Divorce
                     </Text>
                   </Pressable>
@@ -2224,7 +2418,7 @@ function LoadedApp({
       setBoundaryConversationVisible((value) => !value),
     toggleMajorDecisionsMenu: () => setMajorDecisionsVisible((value) => !value),
     openProposalPlanning,
-    moveInTogether: () => showWipAlert("Move in Together"),
+    moveInTogether,
     tryForBaby: () => showWipAlert("Try for a Baby"),
     purchasePropertyTogether: () => showWipAlert("Purchase a Property Together"),
     planWedding: () => showWipAlert("Plan Wedding"),
@@ -2233,7 +2427,7 @@ function LoadedApp({
     separateFinances: () => showWipAlert("Separate Finances"),
     toggleConflictMenu: () => setConflictVisible((value) => !value),
     askPartnerForSpaceAction,
-    askPartnerToMoveOut: () => showWipAlert("Ask them to Move Out"),
+    askPartnerToMoveOut,
     bickerWithPartnerAction,
     breakUpOrDivorceCurrentPartner,
     confrontCurrentPartnerAboutIssue,
@@ -2262,6 +2456,7 @@ function LoadedApp({
             <Text>{`CV score: ${currentCVScore}/100`}</Text>
             <Text>{`Dating score: ${currentDatingScore}/100`}</Text>
             <Text>{`Work experience: ${currentCharacter.workExperienceYears} years`}</Text>
+            <Text>{`Housing: ${currentLivingSituationText}`}</Text>
           </View>
 
           <View style={styles.engineeringTabRow}>
@@ -2627,13 +2822,13 @@ function LoadedApp({
                     <View style={styles.detailGroup}>
                       <RelationshipBar
                         label="Friendship"
-                        value={currentCharacter.partner.friendshipScore}
+                        value={currentCharacter.partner?.friendshipScore ?? 0}
                         minValue={0}
                         maxValue={100}
                       />
                       <RelationshipBar
                         label="Romance"
-                        value={currentCharacter.partner.romanceScore}
+                        value={currentCharacter.partner?.romanceScore ?? 0}
                         minValue={0}
                         maxValue={100}
                         fillColor="pink"
@@ -3781,6 +3976,64 @@ function LoadedApp({
 
   function showWipAlert(title: string) {
     Alert.alert(title, "TBC");
+  }
+
+  function moveInTogether() {
+    const result = runMoveInTogetherAction(latestHouseholdRef.current);
+    if (!result.success) {
+      Alert.alert(
+        result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+        result.message
+      );
+      return;
+    }
+
+    applyLoadedHousehold({
+      household: result.household,
+      latestHouseholdRef,
+      setHousehold,
+    });
+    Alert.alert("Romance", result.message);
+  }
+
+  function askPartnerToMoveOut() {
+    const context = resolveCurrentPartnerContext(latestHouseholdRef.current);
+    if (!context.success) {
+      Alert.alert("Partner Unavailable", context.error);
+      return;
+    }
+
+    Alert.alert(
+      "Romance",
+      `Are you sure you want to ask ${context.partnerCharacter.firstName} to move out?`,
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Ask them to Move Out",
+          style: "destructive",
+          onPress: () => {
+            const result = runAskPartnerToMoveOutAction(latestHouseholdRef.current);
+            if (!result.success) {
+              Alert.alert(
+                result.reason === "partner-unavailable" ? "Partner Unavailable" : "Romance",
+                result.message
+              );
+              return;
+            }
+
+            applyLoadedHousehold({
+              household: result.household,
+              latestHouseholdRef,
+              setHousehold,
+            });
+            Alert.alert("Romance", result.message);
+          },
+        },
+      ]
+    );
   }
 
   function updateProposalSpeech(
@@ -5741,6 +5994,9 @@ const styles = StyleSheet.create({
   partnerActionsButtonText: {
     fontSize: 15,
     lineHeight: 19,
+  },
+  partnerConflictButtonText: {
+    color: "#b42318",
   },
   partnerActionsMenu: {
     padding: 12,

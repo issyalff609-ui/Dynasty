@@ -15,10 +15,17 @@ import { getNormalizedReputation } from "../systems/reputation";
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
 import type {
+  CharacterConversationChildrenView,
+  CharacterConversationMarriageView,
+  CharacterConversationMovingInView,
   Classmate,
+  ConversationView,
   DatingProfile,
   Friend,
   PartnerBoundaryConversationTopic,
+  PartnerConversationCompatibility,
+  PartnerConversationHistoryRecord,
+  PartnerMoveInOutcome,
   PartnerConversationResult,
   PartnerConversationTopic,
   PartnerConflictIssue,
@@ -917,30 +924,9 @@ const resolveDateExperience = ({
 
 type ConversationTier = "poor" | "okay" | "good" | "great";
 
-type ChildrenAnswerState =
-  | "does_not_want"
-  | "unsure"
-  | "wants_later"
-  | "wants_now"
-  | "small_family"
-  | "large_family";
-
-type MarriageAnswerState =
-  | "does_not_want"
-  | "unsure"
-  | "wants_later"
-  | "wants_now"
-  | "elope"
-  | "big_wedding";
-
-type MovingInAnswerState =
-  | "not_ready"
-  | "wait_until_marriage"
-  | "wants_later"
-  | "wants_now"
-  | "natural_next_step"
-  | "needs_space"
-  | "worried";
+type ChildrenAnswerState = CharacterConversationChildrenView;
+type MarriageAnswerState = CharacterConversationMarriageView;
+type MovingInAnswerState = CharacterConversationMovingInView;
 
 type ConversationContext = {
   currentYear: number;
@@ -1003,29 +989,273 @@ const getConversationTier = (person: Character): ConversationTier => {
   return "great";
 };
 
-const rollConversationStatChanges = (
+const getPartnerConversationTopicId = (
   topic: PartnerConversationTopic,
-  success: boolean
-) => {
-  if (!success) {
-    return {
-      friendshipChange: 0,
-      romanceChange: 0,
-    };
-  }
+  boundaryTopic?: PartnerBoundaryConversationTopic
+) => (topic === "boundaries" ? `boundaries:${boundaryTopic ?? "unknown"}` : topic);
 
-  if (topic === "recent_life_event") {
-    return {
-      friendshipChange: randomInt(1, 5),
-      romanceChange: randomInt(0, 3),
-    };
-  }
+const hasDiscussedPartnerConversationTopicThisYear = (
+  relationship: RomanticRelationship,
+  topicId: string,
+  currentYear: number
+) =>
+  (relationship.conversationHistory ?? []).some(
+    (entry) => entry.topicId === topicId && entry.lastDiscussedYear === currentYear
+  );
+
+const markPartnerConversationTopicDiscussed = (
+  relationship: RomanticRelationship,
+  topicId: string,
+  currentYear: number
+): RomanticRelationship => {
+  const nextHistory = (relationship.conversationHistory ?? []).filter(
+    (entry) => entry.topicId !== topicId
+  );
+
+  const nextEntry: PartnerConversationHistoryRecord = {
+    relationshipId: relationship.id,
+    topicId,
+    lastDiscussedYear: currentYear,
+  };
 
   return {
-    friendshipChange: randomInt(1, 3),
-    romanceChange: randomInt(0, 2),
+    ...relationship,
+    conversationHistory: [...nextHistory, nextEntry],
   };
 };
+
+const rollCompatibleConversationDelta = () => ({
+  friendshipChange: randomInt(5, 10),
+  romanceChange: 0,
+});
+
+const rollIncompatibleConversationDelta = () => {
+  const relationshipDelta = randomInt(-10, -1);
+  return {
+    friendshipChange: relationshipDelta,
+    romanceChange: relationshipDelta,
+  };
+};
+
+export const getRelationshipYearsTogether = (
+  relationship: Pick<RomanticRelationship, "startYear">,
+  currentYear: number
+) => Math.max(0, currentYear - relationship.startYear);
+
+export const getActiveRelationshipYearsTogetherBetween = (
+  person: Character,
+  otherPersonId: string,
+  currentYear: number
+) => {
+  const activeRelationship = getActiveRomanticRelationshipBetween(person, otherPersonId);
+  return activeRelationship ? getRelationshipYearsTogether(activeRelationship, currentYear) : null;
+};
+
+export const MOVE_IN_YEARS_TOGETHER_MODIFIERS = {
+  underOneYear: -15,
+  oneYear: 0,
+  twoYears: 10,
+  threeToFourYears: 20,
+  fivePlusYears: 25,
+} as const;
+
+export const MOVE_IN_AGE_MODIFIERS = {
+  age18To20: -10,
+  age21To22: -5,
+  age23To25: 5,
+  age26Plus: 10,
+} as const;
+
+export const MOVE_IN_HOUSING_MODIFIERS = {
+  livingWithParents: -5,
+  renting: 5,
+  ownsSuitableProperty: 15,
+  ownsMultipleProperties: 20,
+  stayingWithSomeoneElse: -10,
+} as const;
+
+export const MOVE_IN_RELATIONSHIP_STATUS_MODIFIERS = {
+  dating: 0,
+  engaged: 15,
+} as const;
+
+export const MOVE_IN_DISPOSITION_MODIFIERS = {
+  eager: 15,
+  neutral: 0,
+  cautious: -10,
+  highlyIndependent: -15,
+} as const;
+
+export const MOVE_IN_FINANCIAL_STABILITY_MODIFIERS = {
+  insecure: -10,
+  modest: 0,
+  stable: 5,
+  strong: 10,
+} as const;
+
+export const MOVE_IN_ACCEPTANCE_THRESHOLD = 90;
+export const MOVE_IN_HESITANT_THRESHOLD = 65;
+
+export const MOVE_OUT_IMMEDIATE_PENALTIES = {
+  Dating: {
+    friendship: [-20, -10] as const,
+    romance: [-20, -10] as const,
+  },
+  Engaged: {
+    friendship: [-50, -20] as const,
+    romance: [-30, -10] as const,
+  },
+  Married: {
+    friendship: [-60, -20] as const,
+    romance: [-60, -10] as const,
+  },
+} as const;
+
+export const MOVE_OUT_YEARLY_PENALTIES = {
+  Dating: {
+    friendship: [-5, -1] as const,
+    romance: [-5, -1] as const,
+    maxYears: 2,
+  },
+  Engaged: {
+    friendship: [-8, -1] as const,
+    romance: [-8, -1] as const,
+    maxYears: null,
+  },
+  Married: {
+    friendship: [-15, -1] as const,
+    romance: [-15, -1] as const,
+    maxYears: null,
+  },
+} as const;
+
+export const getRelationshipQualityForMoveIn = (
+  person: Character,
+  otherPerson: Character
+) => {
+  const scores = resolveRelationshipScoreState(person, otherPerson);
+  return (scores.friendshipScore + scores.romanceScore) / 2;
+};
+
+export const getMoveInYearsTogetherModifier = (yearsTogether: number) => {
+  if (yearsTogether < 1) {
+    return MOVE_IN_YEARS_TOGETHER_MODIFIERS.underOneYear;
+  }
+  if (yearsTogether === 1) {
+    return MOVE_IN_YEARS_TOGETHER_MODIFIERS.oneYear;
+  }
+  if (yearsTogether === 2) {
+    return MOVE_IN_YEARS_TOGETHER_MODIFIERS.twoYears;
+  }
+  if (yearsTogether <= 4) {
+    return MOVE_IN_YEARS_TOGETHER_MODIFIERS.threeToFourYears;
+  }
+
+  return MOVE_IN_YEARS_TOGETHER_MODIFIERS.fivePlusYears;
+};
+
+export const getMoveInAgeModifier = (age: number) => {
+  if (age <= 20) {
+    return MOVE_IN_AGE_MODIFIERS.age18To20;
+  }
+  if (age <= 22) {
+    return MOVE_IN_AGE_MODIFIERS.age21To22;
+  }
+  if (age <= 25) {
+    return MOVE_IN_AGE_MODIFIERS.age23To25;
+  }
+
+  return MOVE_IN_AGE_MODIFIERS.age26Plus;
+};
+
+export const getMoveInDispositionModifier = (
+  person: Character
+) => {
+  switch (person.relationshipPreferences.movingInDisposition) {
+    case "wants":
+      return MOVE_IN_DISPOSITION_MODIFIERS.eager;
+    case "open":
+      return MOVE_IN_DISPOSITION_MODIFIERS.neutral;
+    case "unsure":
+      return MOVE_IN_DISPOSITION_MODIFIERS.cautious;
+    case "does_not_want":
+      return MOVE_IN_DISPOSITION_MODIFIERS.highlyIndependent;
+  }
+};
+
+export const getMoveInRelationshipStatusModifier = (
+  status: RomanticRelationship["currentStatus"]
+) => (status === "Engaged" ? MOVE_IN_RELATIONSHIP_STATUS_MODIFIERS.engaged : MOVE_IN_RELATIONSHIP_STATUS_MODIFIERS.dating);
+
+export const getMoveInOutcomeFromReadiness = (
+  readinessScore: number
+): PartnerMoveInOutcome => {
+  if (readinessScore >= MOVE_IN_ACCEPTANCE_THRESHOLD) {
+    return "accepted";
+  }
+  if (readinessScore >= MOVE_IN_HESITANT_THRESHOLD) {
+    return "hesitant";
+  }
+
+  return "declined";
+};
+
+export const clearRelationshipSpaceStatus = (
+  person: Character,
+  otherPerson: Character
+): [Character, Character] =>
+  updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
+    ...(currentRelationship ?? {
+      id: createRomanticRelationshipId(),
+      personId: otherPerson.id,
+      currentStatus: "Dating",
+      startYear: 0,
+      engagementYear: null,
+      marriageYear: null,
+      endYear: null,
+      endReason: null,
+      boundaries: {},
+      conversationHistory: [],
+    }),
+    personId: otherPerson.id,
+    spaceStatus: null,
+  }));
+
+export const setRelationshipSpaceStatus = (
+  person: Character,
+  otherPerson: Character,
+  startedYear: number,
+  moveOutStatus: "Dating" | "Engaged" | "Married",
+  movedOutPersonId: string
+): [Character, Character] =>
+  updateMirroredRelationship(person, otherPerson, (currentRelationship) => ({
+    ...(currentRelationship ?? {
+      id: createRomanticRelationshipId(),
+      personId: otherPerson.id,
+      currentStatus: moveOutStatus,
+      startYear: startedYear,
+      engagementYear: null,
+      marriageYear: null,
+      endYear: null,
+      endReason: null,
+      boundaries: {},
+      conversationHistory: [],
+    }),
+    personId: otherPerson.id,
+    spaceStatus: {
+      active: true,
+      startedYear,
+      moveOutStatus,
+      movedOutPersonId,
+    },
+  }));
+
+export const applyRelationshipScoreDelta = (
+  person: Character,
+  otherPerson: Character,
+  friendshipChange: number,
+  romanceChange: number
+) => updatePartnerRelationshipScores(person, otherPerson, friendshipChange, romanceChange);
 
 const hasAnyChildren = (person: Character) => person.childrenIds.length > 0;
 
@@ -1107,7 +1337,10 @@ const deriveChildrenAnswerState = (
   return "wants_later";
 };
 
-const getChildrenPartnerLine = (
+const getStoredChildrenAnswerState = (person: Character) =>
+  person.conversationTopicViews.children;
+
+const getChildrenViewText = (
   state: ChildrenAnswerState,
   seed: string,
   quality: ConversationTier
@@ -1227,7 +1460,10 @@ const deriveMarriageAnswerState = (
   return "wants_later";
 };
 
-const getMarriagePartnerLine = (
+const getStoredMarriageAnswerState = (person: Character) =>
+  person.conversationTopicViews.marriage;
+
+const getMarriageViewText = (
   state: MarriageAnswerState,
   seed: string,
   quality: ConversationTier
@@ -1350,7 +1586,10 @@ const deriveMovingInAnswerState = (
   return "wants_later";
 };
 
-const getMovingInPartnerLine = (
+const getStoredMovingInAnswerState = (person: Character) =>
+  person.conversationTopicViews.moving_in;
+
+const getMovingInViewText = (
   state: MovingInAnswerState,
   seed: string,
   quality: ConversationTier
@@ -1408,35 +1647,47 @@ const getBroadMovingInState = (state: MovingInAnswerState) => {
   return "does_not_want";
 };
 
+const getBoundaryTopicBroadPreference = (
+  view: RelationshipBoundaryComfort | RelationshipBoundaryStyle
+) => view;
+
 const replacePartnerPlaceholder = (text: string, otherPerson: Character) =>
   text.replaceAll("[Partner]", getPartnerDisplayName(otherPerson));
 
-const isConversationDiaryEligible = (text: string) =>
-  ![
-    "You got too nervous to ask the question.",
-    "[Partner] changed the subject pretty quickly.",
-    "[Partner] changed the subject when you mentioned marriage.",
-    "[Partner] said they are not ready to talk about marriage yet.",
-    "[Partner] changed the subject when you mentioned living together.",
-  ].includes(text);
-
-const createBoundaryMemory = (
-  text: string,
-  boundaryType: "ex_boundary" | "relationship_style",
-  partnerId: string,
-  relationshipId: string,
-  playerView: RelationshipBoundaryComfort | RelationshipBoundaryStyle,
-  partnerView: RelationshipBoundaryComfort | RelationshipBoundaryStyle,
-  year: number
-) =>
+const createPartnerConversationMemory = ({
+  text,
+  topicId,
+  relationshipId,
+  playerView,
+  partnerView,
+  compatibility,
+  friendshipChange,
+  romanceChange,
+  year,
+  characterIds,
+}: {
+  text: string;
+  topicId: string;
+  relationshipId: string;
+  playerView: string;
+  partnerView: string;
+  compatibility: PartnerConversationCompatibility;
+  friendshipChange: number;
+  romanceChange: number;
+  year: number;
+  characterIds: string[];
+}) =>
   createMemory(text, {
-    type: "relationship_boundary",
-    boundaryType,
-    partnerId,
+    type: "partner_conversation",
+    topicId,
     relationshipId,
     playerView,
     partnerView,
+    compatibility,
+    friendshipChange,
+    romanceChange,
     year,
+    characterIds,
   });
 
 const updateRelationshipBoundaries = (
@@ -1454,6 +1705,7 @@ const updateRelationshipBoundaries = (
     endYear: currentRelationship?.endYear ?? null,
     endReason: currentRelationship?.endReason ?? null,
     boundaries: buildBoundaries(currentRelationship?.boundaries ?? {}),
+    conversationHistory: currentRelationship?.conversationHistory ?? [],
   }));
 
 const buildBoundaryDiscussion = <TView extends RelationshipBoundaryComfort | RelationshipBoundaryStyle>(
@@ -1466,6 +1718,154 @@ const buildBoundaryDiscussion = <TView extends RelationshipBoundaryComfort | Rel
   discussed: true,
   yearDiscussed: currentYear,
 });
+
+const getResolvedChildrenAnswerState = (
+  person: Character,
+  otherPerson: Character,
+  context: ConversationContext,
+  seed: string
+) => getStoredChildrenAnswerState(person) ?? deriveChildrenAnswerState(person, otherPerson, context, seed);
+
+const getResolvedMarriageAnswerState = (
+  person: Character,
+  otherPerson: Character,
+  context: ConversationContext,
+  seed: string
+) => getStoredMarriageAnswerState(person) ?? deriveMarriageAnswerState(person, otherPerson, context, seed);
+
+const getResolvedMovingInAnswerState = (
+  person: Character,
+  otherPerson: Character,
+  context: ConversationContext,
+  seed: string
+) => getStoredMovingInAnswerState(person) ?? deriveMovingInAnswerState(person, otherPerson, context, seed);
+
+const withStoredConversationTopicView = (
+  person: Character,
+  topic: "children" | "marriage" | "moving_in",
+  view: ChildrenAnswerState | MarriageAnswerState | MovingInAnswerState
+): Character => ({
+  ...person,
+  conversationTopicViews: {
+    ...person.conversationTopicViews,
+    [topic]: view,
+  },
+});
+
+const formatSignedStatLine = (label: "Friendship" | "Romance", value: number) =>
+  `${label} ${value >= 0 ? "+" : ""}${value}`;
+
+const buildResolvedConversationText = ({
+  playerViewText,
+  partnerViewText,
+  partnerName,
+  compatibility,
+  friendshipChange,
+  romanceChange,
+}: {
+  playerViewText: string;
+  partnerViewText: string;
+  partnerName: string;
+  compatibility: PartnerConversationCompatibility;
+  friendshipChange: number;
+  romanceChange: number;
+}) => {
+  const sections = [
+    playerViewText,
+    `${partnerName} ${partnerViewText}`,
+    compatibility === "compatible"
+      ? "You felt closer after discovering that you want similar things."
+      : "The difference between your views caused tension.",
+    formatSignedStatLine("Friendship", friendshipChange),
+  ];
+
+  if (romanceChange !== 0) {
+    sections.push(formatSignedStatLine("Romance", romanceChange));
+  }
+
+  return sections.join("\n\n");
+};
+
+const buildConversationView = (
+  key: string,
+  text: string,
+  broadPreference: string
+): ConversationView => ({
+  key,
+  text,
+  broadPreference,
+});
+
+const getPlayerChildrenViewText = (
+  state: ChildrenAnswerState,
+  partnerName: string
+) => {
+  switch (state) {
+    case "does_not_want":
+      return "You realised you do not want children.";
+    case "unsure":
+      return "You realised you are not sure whether you want children.";
+    case "wants_now":
+      return "You realised you really want children.";
+    case "small_family":
+      return "You realised you would like a small family.";
+    case "large_family":
+      return "You realised you would love a big family.";
+    default:
+      return `You realised you would like children one day with ${partnerName}.`;
+  }
+};
+
+const getPlayerMarriageViewText = (state: MarriageAnswerState) => {
+  switch (state) {
+    case "does_not_want":
+      return "You realised marriage does not matter to you.";
+    case "unsure":
+      return "You realised you are not sure whether you ever want to get married.";
+    case "wants_now":
+      return "You realised that marriage matters more to you than you thought.";
+    case "elope":
+      return "You realised you would rather elope than have a big wedding.";
+    case "big_wedding":
+      return "You realised you have always wanted a big wedding.";
+    default:
+      return "You realised you would like to get married one day.";
+  }
+};
+
+const getPlayerMovingInViewText = (
+  state: MovingInAnswerState,
+  partnerName: string
+) => {
+  switch (state) {
+    case "not_ready":
+    case "needs_space":
+    case "worried":
+      return "You realised you aren't ready to share your space with someone yet.";
+    case "wants_now":
+    case "natural_next_step":
+      return `You realised you would love to come home to ${partnerName} every day.`;
+    case "wait_until_marriage":
+      return "You realised you would rather wait until marriage before living together.";
+    default:
+      return "You realised you would like to live together one day.";
+  }
+};
+
+const getBoundaryPlayerViewText = (
+  topic: PartnerBoundaryConversationTopic,
+  view: RelationshipBoundaryComfort | RelationshipBoundaryStyle
+) => {
+  if (topic === "staying_close_with_an_ex") {
+    return view === "comfortable"
+      ? "You realised you are comfortable staying close with an ex."
+      : "You realised you are not comfortable staying close with an ex.";
+  }
+
+  return view === "closed"
+    ? "You realised you want a closed relationship."
+    : "You realised you are open to an open relationship.";
+};
 
 const getAvailableRecentLifeEventConversationTypes = (
   person: Character,
@@ -1483,7 +1883,7 @@ export const getAvailablePartnerConversationTopics = (
     topics.push("marriage");
   }
 
-  if (!context.livesTogether) {
+  if (!context.livesTogether && !isMarried(person, otherPerson.id)) {
     topics.push("moving_in");
   }
 
@@ -1492,6 +1892,34 @@ export const getAvailablePartnerConversationTopics = (
   }
 
   return topics;
+};
+
+export const isPartnerConversationTopicDisabled = ({
+  person,
+  otherPerson,
+  currentYear,
+  topic,
+  boundaryTopic,
+}: {
+  person: Character;
+  otherPerson: Character;
+  currentYear: number;
+  topic: PartnerConversationTopic;
+  boundaryTopic?: PartnerBoundaryConversationTopic;
+}) => {
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(otherPerson, person.id);
+
+  if (!activeRelationship) {
+    return false;
+  }
+
+  return hasDiscussedPartnerConversationTopicThisYear(
+    activeRelationship,
+    getPartnerConversationTopicId(topic, boundaryTopic),
+    currentYear
+  );
 };
 
 export const startDating = (
@@ -1519,6 +1947,7 @@ export const startDating = (
         endReason: null,
         boundaries: {},
         spaceStatus: null,
+        conversationHistory: [],
       };
     }
 
@@ -1541,6 +1970,7 @@ export const startDating = (
       endReason: null,
       boundaries: currentRelationship?.boundaries ?? {},
       spaceStatus: currentRelationship?.spaceStatus ?? null,
+      conversationHistory: currentRelationship?.conversationHistory ?? [],
     };
   });
 };
@@ -1561,6 +1991,7 @@ export const becomeEngaged = (
     endReason: null,
     boundaries: currentRelationship?.boundaries ?? {},
     spaceStatus: currentRelationship?.spaceStatus ?? null,
+    conversationHistory: currentRelationship?.conversationHistory ?? [],
   }));
 
 export const getMarried = (
@@ -1579,6 +2010,7 @@ export const getMarried = (
     endReason: null,
     boundaries: currentRelationship?.boundaries ?? {},
     spaceStatus: currentRelationship?.spaceStatus ?? null,
+    conversationHistory: currentRelationship?.conversationHistory ?? [],
   }));
 
 export const separate = (
@@ -1596,6 +2028,7 @@ export const separate = (
     endReason: null,
     boundaries: currentRelationship?.boundaries ?? {},
     spaceStatus: currentRelationship?.spaceStatus ?? null,
+    conversationHistory: currentRelationship?.conversationHistory ?? [],
   }));
 
 export const endRelationship = (
@@ -1615,6 +2048,7 @@ export const endRelationship = (
     endReason,
     boundaries: currentRelationship?.boundaries ?? {},
     spaceStatus: currentRelationship?.spaceStatus ?? null,
+    conversationHistory: currentRelationship?.conversationHistory ?? [],
   }));
 
 export const spendTimeTogether = (
@@ -1909,6 +2343,7 @@ export const askPartnerForSpace = (
         active: true,
         startedYear: currentYear,
       },
+      conversationHistory: currentRelationship?.conversationHistory ?? [],
     })
   );
 
@@ -2037,6 +2472,23 @@ export const haveConversationAbout = (
   };
   const quality = getConversationTier(person);
   const seed = buildConversationSeed(person, otherPerson, topic, conversationContext);
+  const topicId = getPartnerConversationTopicId(topic, boundaryTopic);
+
+  if (hasDiscussedPartnerConversationTopicThisYear(activeRelationship, topicId, currentYear)) {
+    return {
+      person,
+      otherPerson,
+      result: {
+        status: "already_discussed",
+        topicId,
+        text: "Already discussed this year",
+        friendshipChange: 0,
+        romanceChange: 0,
+        diaryEntryCreated: false,
+        memoryCreated: false,
+      },
+    };
+  }
 
   if (topic === "recent_life_event") {
     return null;
@@ -2055,15 +2507,25 @@ export const haveConversationAbout = (
       boundaryTopic === "staying_close_with_an_ex"
         ? otherPerson.relationshipPreferences.exBoundaryPreference
         : otherPerson.relationshipPreferences.relationshipStylePreference;
-    const resultText =
+    const playerText = getBoundaryPlayerViewText(boundaryTopic, playerView);
+    const partnerText = replacePartnerPlaceholder(
       boundaryTopic === "staying_close_with_an_ex"
         ? partnerView === "comfortable"
-          ? "[Partner] said they are comfortable with you staying close with an ex."
-          : "[Partner] said they would not be comfortable with you staying close with an ex."
+          ? "is comfortable with you staying close with an ex."
+          : "would not be comfortable with you staying close with an ex."
         : partnerView === "closed"
-          ? "[Partner] wants a closed relationship."
-          : "[Partner] is open to an open relationship.";
-    const resolvedText = replacePartnerPlaceholder(resultText, otherPerson);
+          ? "wants a closed relationship."
+          : "is open to an open relationship.",
+      otherPerson
+    );
+    const compatibility: PartnerConversationCompatibility =
+      getBoundaryTopicBroadPreference(playerView) === getBoundaryTopicBroadPreference(partnerView)
+        ? "compatible"
+        : "incompatible";
+    const statChanges =
+      compatibility === "compatible"
+        ? rollCompatibleConversationDelta()
+        : rollIncompatibleConversationDelta();
     const [boundaryUpdatedPerson, boundaryUpdatedOtherPerson] =
       boundaryTopic === "staying_close_with_an_ex"
         ? updateRelationshipBoundaries(person, otherPerson, (currentBoundaries) => ({
@@ -2082,227 +2544,256 @@ export const haveConversationAbout = (
               currentYear
             ),
           }));
-    const { friendshipChange, romanceChange } = rollConversationStatChanges(topic, true);
-    const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
+    const [trackedPerson, trackedOtherPerson] = updateMirroredRelationship(
       boundaryUpdatedPerson,
       boundaryUpdatedOtherPerson,
-      friendshipChange,
-      romanceChange
+      (currentRelationship) =>
+        markPartnerConversationTopicDiscussed(
+          {
+            ...(currentRelationship ?? activeRelationship),
+            personId: boundaryUpdatedOtherPerson.id,
+          },
+          topicId,
+          currentYear
+        )
     );
-    const memory = createBoundaryMemory(
-      resolvedText,
-      boundaryTopic === "staying_close_with_an_ex"
-        ? "ex_boundary"
-        : "relationship_style",
-      otherPerson.id,
-      activeRelationship.id,
-      playerView,
-      partnerView,
-      currentYear
+    const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
+      trackedPerson,
+      trackedOtherPerson,
+      statChanges.friendshipChange,
+      statChanges.romanceChange
     );
-    const withMemory = {
-      ...scoredPerson,
-      memories: [memory, ...scoredPerson.memories].slice(0, 20),
-    };
+    const resolvedText = buildResolvedConversationText({
+      playerViewText: playerText,
+      partnerViewText: partnerText,
+      partnerName: otherPerson.firstName,
+      compatibility,
+      friendshipChange: statChanges.friendshipChange,
+      romanceChange: statChanges.romanceChange,
+    });
     const withDiary = addDiaryEntryIfMissing(
-      withMemory,
+      scoredPerson,
       currentYear,
       resolvedText,
       "relationship"
     );
+    const sharedConversationMemory = createPartnerConversationMemory({
+      text: resolvedText,
+      topicId,
+      relationshipId: activeRelationship.id,
+      playerView: playerText,
+      partnerView: `${otherPerson.firstName} ${partnerText}`,
+      compatibility,
+      friendshipChange: statChanges.friendshipChange,
+      romanceChange: statChanges.romanceChange,
+      year: currentYear,
+      characterIds: [person.id, otherPerson.id],
+    });
+    const mirroredConversationMemory = {
+      ...sharedConversationMemory,
+    };
 
     return {
-      person: withDiary,
-      otherPerson: scoredOtherPerson,
+      person: {
+        ...withDiary,
+        memories: [sharedConversationMemory, ...withDiary.memories].slice(0, 20),
+      },
+      otherPerson: {
+        ...scoredOtherPerson,
+        memories: [mirroredConversationMemory, ...scoredOtherPerson.memories].slice(0, 20),
+      },
       result: {
+        status: "resolved",
+        topicId,
         text: resolvedText,
-        friendshipChange,
-        romanceChange,
-        diaryEntryCreated: withDiary !== withMemory,
+        playerView: buildConversationView(playerView, playerText, playerView),
+        partnerView: buildConversationView(partnerView, `${otherPerson.firstName} ${partnerText}`, partnerView),
+        compatibility,
+        friendshipChange: statChanges.friendshipChange,
+        romanceChange: statChanges.romanceChange,
+        diaryEntryCreated: withDiary !== scoredPerson,
         memoryCreated: true,
       },
     };
   }
 
-  let resolvedText = "";
-  let success = true;
-  let diaryEligible = false;
-  const playerChildrenState = deriveChildrenAnswerState(
+  const playerChildrenState = getResolvedChildrenAnswerState(
     person,
     otherPerson,
     conversationContext,
     `${seed}-player-children`
   );
-  const partnerChildrenState = deriveChildrenAnswerState(
+  const partnerChildrenState = getResolvedChildrenAnswerState(
     otherPerson,
     person,
     conversationContext,
     `${seed}-partner-children`
   );
-  const playerMarriageState = deriveMarriageAnswerState(
+  const playerMarriageState = getResolvedMarriageAnswerState(
     person,
     otherPerson,
     conversationContext,
     `${seed}-player-marriage`
   );
-  const partnerMarriageState = deriveMarriageAnswerState(
+  const partnerMarriageState = getResolvedMarriageAnswerState(
     otherPerson,
     person,
     conversationContext,
     `${seed}-partner-marriage`
   );
-  const playerMovingState = deriveMovingInAnswerState(
+  const playerMovingState = getResolvedMovingInAnswerState(
     person,
     otherPerson,
     conversationContext,
     `${seed}-player-moving`
   );
-  const partnerMovingState = deriveMovingInAnswerState(
+  const partnerMovingState = getResolvedMovingInAnswerState(
     otherPerson,
     person,
     conversationContext,
     `${seed}-partner-moving`
   );
+  let playerView: ConversationView | null = null;
+  let partnerView: ConversationView | null = null;
 
   if (topic === "children") {
-    if (quality === "poor") {
-      resolvedText = replacePartnerPlaceholder(
-        pickStable(
-          [
-            "You got too nervous to ask the question.",
-            "[Partner] changed the subject pretty quickly.",
-          ] as const,
-          `${seed}-children-poor`
-        ),
+    playerView = buildConversationView(
+      playerChildrenState,
+      getPlayerChildrenViewText(playerChildrenState, otherPerson.firstName),
+      getBroadChildrenState(playerChildrenState)
+    );
+    partnerView = buildConversationView(
+      partnerChildrenState,
+      replacePartnerPlaceholder(
+        getChildrenViewText(partnerChildrenState, `${seed}-children-partner`, quality),
         otherPerson
-      );
-      success = false;
-    } else if (
-      quality === "great" &&
-      getBroadChildrenState(playerChildrenState) === getBroadChildrenState(partnerChildrenState) &&
-      hashString(`${seed}-children-same`) % 2 === 0
-    ) {
-      resolvedText = "You both realised you want the same things when it comes to children.";
-      diaryEligible = true;
-    } else if (
-      quality === "great" &&
-      getBroadChildrenState(playerChildrenState) !== getBroadChildrenState(partnerChildrenState) &&
-      hashString(`${seed}-children-different`) % 2 === 0
-    ) {
-      resolvedText = "You realised you may want very different things when it comes to children.";
-      diaryEligible = true;
-    } else if (
-      playerChildrenState === "does_not_want" &&
-      hashString(`${seed}-children-player`) % 3 === 0
-    ) {
-      resolvedText = "You realised you weren't ready for children.";
-    } else if (
-      getBroadChildrenState(playerChildrenState) === "wants" &&
-      hashString(`${seed}-children-player-wants`) % 3 === 0
-    ) {
-      resolvedText = "You realised you really want children.";
-    } else {
-      resolvedText = replacePartnerPlaceholder(
-        getChildrenPartnerLine(partnerChildrenState, `${seed}-children-partner`, quality),
-        otherPerson
-      );
-      diaryEligible = isConversationDiaryEligible(
-        getChildrenPartnerLine(partnerChildrenState, `${seed}-children-partner`, quality)
-      );
-    }
+      ),
+      getBroadChildrenState(partnerChildrenState)
+    );
   }
 
   if (topic === "marriage") {
-    if (quality === "poor") {
-      resolvedText = replacePartnerPlaceholder(
-        "[Partner] changed the subject when you mentioned marriage.",
+    playerView = buildConversationView(
+      playerMarriageState,
+      getPlayerMarriageViewText(playerMarriageState),
+      getBroadMarriageState(playerMarriageState)
+    );
+    partnerView = buildConversationView(
+      partnerMarriageState,
+      replacePartnerPlaceholder(
+        getMarriageViewText(partnerMarriageState, `${seed}-marriage-partner`, quality),
         otherPerson
-      );
-      success = false;
-    } else if (
-      getBroadMarriageState(playerMarriageState) !== getBroadMarriageState(partnerMarriageState) &&
-      hashString(`${seed}-marriage-different`) % 2 === 0
-    ) {
-      resolvedText = "You both realised you want very different things when it comes to marriage.";
-      diaryEligible = true;
-    } else if (playerMarriageState === "does_not_want" || playerMarriageState === "unsure") {
-      resolvedText = "You realised you are not sure whether you ever want to get married.";
-    } else if (
-      getBroadMarriageState(playerMarriageState) === "wants" &&
-      hashString(`${seed}-marriage-player-wants`) % 2 === 0
-    ) {
-      resolvedText = "You realised that marriage matters more to you than you thought.";
-    } else {
-      const partnerLine = getMarriagePartnerLine(
-        partnerMarriageState,
-        `${seed}-marriage-partner`,
-        quality
-      );
-      resolvedText = replacePartnerPlaceholder(partnerLine, otherPerson);
-      diaryEligible = isConversationDiaryEligible(partnerLine);
-    }
+      ),
+      getBroadMarriageState(partnerMarriageState)
+    );
   }
 
   if (topic === "moving_in") {
-    if (quality === "poor") {
-      resolvedText = replacePartnerPlaceholder(
-        "[Partner] changed the subject when you mentioned living together.",
+    playerView = buildConversationView(
+      playerMovingState,
+      getPlayerMovingInViewText(playerMovingState, otherPerson.firstName),
+      getBroadMovingInState(playerMovingState)
+    );
+    partnerView = buildConversationView(
+      partnerMovingState,
+      replacePartnerPlaceholder(
+        getMovingInViewText(partnerMovingState, `${seed}-moving-partner`, quality),
         otherPerson
-      );
-      success = false;
-    } else if (
-      quality === "great" &&
-      (playerMovingState === "wants_now" || playerMovingState === "natural_next_step") &&
-      (partnerMovingState === "wants_now" || partnerMovingState === "natural_next_step")
-    ) {
-      resolvedText = "You both agreed that moving in together feels like the natural next step.";
-      diaryEligible = true;
-    } else if (
-      playerMovingState === "needs_space" ||
-      playerMovingState === "worried" ||
-      playerMovingState === "not_ready"
-    ) {
-      resolvedText = "You realised you aren't ready to share your space with someone yet.";
-    } else if (
-      playerMovingState === "wants_now" ||
-      playerMovingState === "natural_next_step"
-    ) {
-      resolvedText = replacePartnerPlaceholder(
-        "You realised you would love to come home to [Partner] every day.",
-        otherPerson
-      );
-    } else {
-      const partnerLine = getMovingInPartnerLine(
-        partnerMovingState,
-        `${seed}-moving-partner`,
-        quality
-      );
-      resolvedText = replacePartnerPlaceholder(partnerLine, otherPerson);
-      diaryEligible = isConversationDiaryEligible(partnerLine);
-    }
+      ),
+      getBroadMovingInState(partnerMovingState)
+    );
   }
 
-  const { friendshipChange, romanceChange } = rollConversationStatChanges(topic, success);
-  const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
-    person,
-    otherPerson,
-    friendshipChange,
-    romanceChange
+  if (!playerView || !partnerView) {
+    return null;
+  }
+
+  const compatibility: PartnerConversationCompatibility =
+    playerView.broadPreference === partnerView.broadPreference
+      ? "compatible"
+      : "incompatible";
+  const statChanges =
+    compatibility === "compatible"
+      ? rollCompatibleConversationDelta()
+      : rollIncompatibleConversationDelta();
+  const resolvedText = buildResolvedConversationText({
+    playerViewText: playerView.text,
+    partnerViewText: partnerView.text.replace(`${otherPerson.firstName} `, ""),
+    partnerName: otherPerson.firstName,
+    compatibility,
+    friendshipChange: statChanges.friendshipChange,
+    romanceChange: statChanges.romanceChange,
+  });
+  const withStoredViews = [
+    topic === "children"
+      ? withStoredConversationTopicView(person, "children", playerChildrenState)
+      : topic === "marriage"
+        ? withStoredConversationTopicView(person, "marriage", playerMarriageState)
+        : withStoredConversationTopicView(person, "moving_in", playerMovingState),
+    topic === "children"
+      ? withStoredConversationTopicView(otherPerson, "children", partnerChildrenState)
+      : topic === "marriage"
+        ? withStoredConversationTopicView(otherPerson, "marriage", partnerMarriageState)
+        : withStoredConversationTopicView(otherPerson, "moving_in", partnerMovingState),
+  ] as const;
+  const [trackedPerson, trackedOtherPerson] = updateMirroredRelationship(
+    withStoredViews[0],
+    withStoredViews[1],
+    (currentRelationship) =>
+      markPartnerConversationTopicDiscussed(
+        {
+          ...(currentRelationship ?? activeRelationship),
+          personId: otherPerson.id,
+        },
+        topicId,
+        currentYear
+      )
   );
-  const withDiary =
-    success && diaryEligible
-      ? addDiaryEntryIfMissing(scoredPerson, currentYear, resolvedText, "relationship")
-      : scoredPerson;
+  const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
+    trackedPerson,
+    trackedOtherPerson,
+    statChanges.friendshipChange,
+    statChanges.romanceChange
+  );
+  const withDiary = addDiaryEntryIfMissing(
+    scoredPerson,
+    currentYear,
+    resolvedText,
+    "relationship"
+  );
+  const sharedConversationMemory = createPartnerConversationMemory({
+    text: resolvedText,
+    topicId,
+    relationshipId: activeRelationship.id,
+    playerView: playerView.text,
+    partnerView: partnerView.text,
+    compatibility,
+    friendshipChange: statChanges.friendshipChange,
+    romanceChange: statChanges.romanceChange,
+    year: currentYear,
+    characterIds: [person.id, otherPerson.id],
+  });
 
   return {
-    person: withDiary,
-    otherPerson: scoredOtherPerson,
+    person: {
+      ...withDiary,
+      memories: [sharedConversationMemory, ...withDiary.memories].slice(0, 20),
+    },
+    otherPerson: {
+      ...scoredOtherPerson,
+      memories: [{ ...sharedConversationMemory }, ...scoredOtherPerson.memories].slice(0, 20),
+    },
     result: {
+      status: "resolved",
+      topicId,
       text: resolvedText,
-      friendshipChange,
-      romanceChange,
+      playerView,
+      partnerView,
+      compatibility,
+      friendshipChange: statChanges.friendshipChange,
+      romanceChange: statChanges.romanceChange,
       diaryEntryCreated: withDiary !== scoredPerson,
-      memoryCreated: false,
+      memoryCreated: true,
     },
   };
 };

@@ -176,5 +176,6 @@ export const createCharacter = (
       birthYear: currentYear - age,
     }),
     recentRelationshipLifeEvents: [],
+    conversationTopicViews: {},
   };
 };

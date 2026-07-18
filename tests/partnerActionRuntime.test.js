@@ -9,17 +9,22 @@ const {
   buildLoadedAppPartnerActionHandlers,
   PARTNER_ACTION_HANDLER_NAMES,
   runAskPartnerForSpaceAction,
+  runAskPartnerToMoveOutAction,
   runBickerWithPartnerAction,
   runBreakUpOrDivorceAction,
+  runMoveInTogetherAction,
   runPartnerConversationAction,
   runPartnerDateAction,
   runSpendTimeWithPartnerAction,
 } = require("../.tmp-tests/src/systems/partnerActionRuntime.js");
+const { ageHouseholdOneYear } = require("../.tmp-tests/src/systems/ageing.js");
 const {
   autosaveHouseholdIfReady,
 } = require("../.tmp-tests/src/systems/appSaveLifecycle.js");
 const {
   HOUSEHOLD_STORAGE_KEY,
+  hydrateHousehold,
+  getCharacterResidence,
   getCurrentHouseholdCharacter,
   resetStorageAdapterOverrideForTests,
   setPlatformOverrideForTests,
@@ -28,11 +33,15 @@ const {
   const householdSystem = require("../.tmp-tests/src/systems/household.js");
   return {
     ...saveSystem,
+    getCharacterResidence: householdSystem.getCharacterResidence,
     getCurrentHouseholdCharacter: householdSystem.getCurrentHouseholdCharacter,
   };
 })();
 const { startDating } = require("../.tmp-tests/src/systems/relationships.js");
-const { createPropertyMarket } = require("../.tmp-tests/src/systems/property.js");
+const {
+  createPropertyMarket,
+  describeCurrentLivingSituation,
+} = require("../.tmp-tests/src/systems/property.js");
 
 const CURRENT_YEAR = 2026;
 const APP_SOURCE_PATH = "/Users/isabellealff/Documents/Dynasties/App.tsx";
@@ -66,13 +75,20 @@ test.afterEach(() => {
   resetStorageAdapterOverrideForTests();
 });
 
-const buildCharacter = ({ id, firstName, gender, bankBalanceGBP = 2500 }) => {
+const buildCharacter = ({
+  id,
+  firstName,
+  gender,
+  age = 30,
+  bankBalanceGBP = 2500,
+  annualIncomeGBP = 0,
+}) => {
   const base = createCharacter(
     gender === "Male" ? "Brother" : "Sister",
     gender,
     "White",
     "Tester",
-    30,
+    age,
     CURRENT_YEAR,
     new Set(),
     "English",
@@ -90,7 +106,7 @@ const buildCharacter = ({ id, firstName, gender, bankBalanceGBP = 2500 }) => {
     appearance: 50,
     intelligence: 50,
     job: "No job",
-    annualIncomeGBP: 0,
+    annualIncomeGBP,
     bankBalanceGBP,
     memories: [],
     diary: [],
@@ -126,6 +142,28 @@ const buildPartnerProfile = (character, friendshipScore = 80, romanceScore = 90)
   matchChanceRandomness: 0,
   roseMatchBoost: 0,
   datingCharacteristics: [],
+});
+
+const buildProperty = ({
+  id,
+  residentIds,
+  ownerIds = [],
+  ownershipShares = Object.fromEntries(
+    ownerIds.map((ownerId) => [ownerId, ownerIds.length === 0 ? 0 : 100 / ownerIds.length])
+  ),
+  propertyUse = "residence",
+}) => ({
+  id,
+  bedrooms: 2,
+  bathrooms: 1,
+  valueGBP: 220000,
+  condition: "good",
+  neighbourhoodQuality: "average",
+  ownerIds,
+  ownershipShares,
+  residentIds,
+  propertyUse,
+  mortgageId: null,
 });
 
 const buildHousehold = ({ bankBalanceGBP = 4200 } = {}) => {
@@ -195,6 +233,169 @@ const buildHousehold = ({ bankBalanceGBP = 4200 } = {}) => {
     originalPlayerId: "player-1",
     currentCharacterId: "player-1",
     characters: [currentPlayer, currentPartner, sibling],
+  };
+};
+
+const buildMoveInHousehold = ({
+  friendshipScore = 80,
+  romanceScore = 90,
+  chemistry = 50,
+  yearsTogether = 1,
+  relationshipStatus = "Dating",
+  playerLivingSituation = "property",
+  playerOwnsMultipleProperties = false,
+  partnerMovingDisposition = "open",
+  playerAnnualIncomeGBP = 50000,
+  partnerAnnualIncomeGBP = 45000,
+  playerBankBalanceGBP = 8000,
+  partnerBankBalanceGBP = 6000,
+  playerAge = 28,
+  partnerAge = 28,
+} = {}) => {
+  const player = buildCharacter({
+    id: "player-1",
+    firstName: "Alex",
+    gender: "Male",
+    age: playerAge,
+    annualIncomeGBP: playerAnnualIncomeGBP,
+    bankBalanceGBP: playerBankBalanceGBP,
+  });
+  const partner = buildCharacter({
+    id: "partner-1",
+    firstName: "Jamie",
+    gender: "Female",
+    age: partnerAge,
+    annualIncomeGBP: partnerAnnualIncomeGBP,
+    bankBalanceGBP: partnerBankBalanceGBP,
+  });
+  const [datedPlayer, datedPartner] = startDating(player, partner, CURRENT_YEAR - yearsTogether);
+  const currentPlayer = {
+    ...datedPlayer,
+    relationshipPreferences: {
+      ...datedPlayer.relationshipPreferences,
+      movingInDisposition: "wants",
+    },
+    partner: {
+      ...buildPartnerProfile(datedPartner, friendshipScore, romanceScore),
+      chemistry,
+    },
+    livingSituation:
+      playerLivingSituation === "family_home"
+        ? { type: "family_home", propertyId: "property-player-home" }
+        : playerLivingSituation === "homeless"
+          ? { type: "homeless" }
+          : playerLivingSituation === "staying_with_person"
+            ? {
+                type: "staying_with_person",
+                hostId: "host-1",
+                propertyId: "property-host-home",
+              }
+            : { type: "property", propertyId: "property-player-home" },
+    romanticRelationships: datedPlayer.romanticRelationships.map((relationship) => ({
+      ...relationship,
+      currentStatus: relationshipStatus,
+      friendshipScore,
+      romanceScore,
+    })),
+  };
+  const currentPartner = {
+    ...datedPartner,
+    relationshipPreferences: {
+      ...datedPartner.relationshipPreferences,
+      movingInDisposition: partnerMovingDisposition,
+    },
+    partner: {
+      ...buildPartnerProfile(datedPlayer, friendshipScore, romanceScore),
+      chemistry,
+    },
+    livingSituation: { type: "property", propertyId: "property-partner-home" },
+    romanticRelationships: datedPartner.romanticRelationships.map((relationship) => ({
+      ...relationship,
+      currentStatus: relationshipStatus,
+      friendshipScore,
+      romanceScore,
+    })),
+  };
+
+  const characters = [currentPlayer, currentPartner];
+  const properties = [];
+
+  if (playerLivingSituation === "property") {
+    properties.push(
+      buildProperty({
+        id: "property-player-home",
+        residentIds: [currentPlayer.id],
+        ownerIds: [currentPlayer.id],
+        ownershipShares: { [currentPlayer.id]: 100 },
+      })
+    );
+  } else if (playerLivingSituation === "family_home") {
+    properties.push(
+      buildProperty({
+        id: "property-player-home",
+        residentIds: [currentPlayer.id],
+        ownerIds: ["parent-1"],
+        ownershipShares: { "parent-1": 100 },
+      })
+    );
+  } else if (playerLivingSituation === "staying_with_person") {
+    const host = buildCharacter({
+      id: "host-1",
+      firstName: "Morgan",
+      gender: "Female",
+      age: 34,
+    });
+    characters.push(host);
+    properties.push(
+      buildProperty({
+        id: "property-host-home",
+        residentIds: [host.id, currentPlayer.id],
+        ownerIds: [host.id],
+        ownershipShares: { [host.id]: 100 },
+      })
+    );
+  }
+
+  properties.push(
+    buildProperty({
+      id: "property-partner-home",
+      residentIds: [currentPartner.id],
+      ownerIds: [currentPartner.id],
+      ownershipShares: { [currentPartner.id]: 100 },
+    })
+  );
+
+  if (playerOwnsMultipleProperties) {
+    properties.push(
+      buildProperty({
+        id: "property-player-investment",
+        residentIds: [],
+        ownerIds: [currentPlayer.id],
+        ownershipShares: { [currentPlayer.id]: 100 },
+        propertyUse: "rental",
+      })
+    );
+  }
+
+  return {
+    currentYear: CURRENT_YEAR,
+    country: "England",
+    familyLastName: "Tester",
+    netWorthGBP: 15000,
+    householdIncomeGBP: 95000,
+    householdPlayerIncomeGBP: playerAnnualIncomeGBP,
+    householdOtherIncomeGBP: partnerAnnualIncomeGBP,
+    householdPlayerNetWorthGBP: playerBankBalanceGBP,
+    householdOtherNetWorthGBP: partnerBankBalanceGBP,
+    reputation: 62,
+    tbcFlags: [],
+    ideas: [],
+    properties,
+    propertyMarket: createPropertyMarket(CURRENT_YEAR),
+    propertyMortgages: [],
+    originalPlayerId: "player-1",
+    currentCharacterId: "player-1",
+    characters,
   };
 };
 
@@ -338,7 +539,15 @@ const createPartnerViewHarness = (initialHousehold) => {
       }
     },
     askPartnerToMoveOut: () => {
-      alerts.push("move-out");
+      const result = runAskPartnerToMoveOutAction(latestHouseholdRef.current);
+      alerts.push(result.message);
+      if (result.success) {
+        applyLoadedHousehold({
+          household: result.household,
+          latestHouseholdRef,
+          setHousehold,
+        });
+      }
     },
     bickerWithPartnerAction: () => {
       const result = runBickerWithPartnerAction(latestHouseholdRef.current);
@@ -608,6 +817,412 @@ test("Bicker works", () => {
 
   assert.equal(result.success, true);
   assert.notDeepEqual(result.household, household);
+});
+
+test("years together influences move-in readiness", () => {
+  const recentRelationship = buildMoveInHousehold({
+    friendshipScore: 55,
+    romanceScore: 55,
+    yearsTogether: 0,
+    partnerMovingDisposition: "unsure",
+    playerAnnualIncomeGBP: 0,
+    partnerAnnualIncomeGBP: 0,
+    playerBankBalanceGBP: 0,
+    partnerBankBalanceGBP: 0,
+    partnerAge: 21,
+  });
+  const establishedRelationship = buildMoveInHousehold({
+    friendshipScore: 55,
+    romanceScore: 55,
+    yearsTogether: 5,
+    partnerMovingDisposition: "unsure",
+    playerAnnualIncomeGBP: 0,
+    partnerAnnualIncomeGBP: 0,
+    playerBankBalanceGBP: 0,
+    partnerBankBalanceGBP: 0,
+    partnerAge: 21,
+  });
+
+  const recentResult = runMoveInTogetherAction(recentRelationship);
+  const establishedResult = runMoveInTogetherAction(establishedRelationship);
+
+  assert.equal(recentResult.outcome, "declined");
+  assert.equal(establishedResult.outcome, "hesitant");
+});
+
+test("move-in relationship quality uses friendship and romance while ignoring chemistry", () => {
+  const highQualityLowChemistry = buildMoveInHousehold({
+    friendshipScore: 95,
+    romanceScore: 95,
+    chemistry: 0,
+    yearsTogether: 2,
+    playerOwnsMultipleProperties: true,
+    playerAnnualIncomeGBP: 0,
+    partnerAnnualIncomeGBP: 0,
+    playerBankBalanceGBP: 0,
+    partnerBankBalanceGBP: 0,
+  });
+  const lowQualityHighChemistry = buildMoveInHousehold({
+    friendshipScore: 40,
+    romanceScore: 40,
+    chemistry: 100,
+    yearsTogether: 0,
+    playerLivingSituation: "family_home",
+    playerAnnualIncomeGBP: 0,
+    partnerAnnualIncomeGBP: 0,
+    playerBankBalanceGBP: 0,
+    partnerBankBalanceGBP: 0,
+    partnerAge: 21,
+    partnerMovingDisposition: "unsure",
+  });
+
+  const strongResult = runMoveInTogetherAction(highQualityLowChemistry);
+  const weakResult = runMoveInTogetherAction(lowQualityHighChemistry);
+
+  assert.equal(strongResult.outcome, "accepted");
+  assert.notEqual(weakResult.outcome, "accepted");
+});
+
+test("married couples automatically succeed when moving in together", () => {
+  const household = buildMoveInHousehold({
+    friendshipScore: 20,
+    romanceScore: 20,
+    relationshipStatus: "Married",
+    playerLivingSituation: "family_home",
+    partnerMovingDisposition: "does_not_want",
+  });
+
+  const result = runMoveInTogetherAction(household);
+
+  assert.equal(result.success, true);
+  assert.equal(result.outcome, "accepted");
+});
+
+test("perfect relationship with suitable housing succeeds", () => {
+  const household = buildMoveInHousehold({
+    friendshipScore: 100,
+    romanceScore: 100,
+    yearsTogether: 3,
+    playerOwnsMultipleProperties: true,
+    partnerMovingDisposition: "open",
+  });
+
+  const result = runMoveInTogetherAction(household);
+
+  assert.equal(result.success, true);
+  assert.equal(result.outcome, "accepted");
+});
+
+test("homeless players cannot move in with a partner", () => {
+  const household = buildMoveInHousehold({
+    playerLivingSituation: "homeless",
+  });
+
+  const result = runMoveInTogetherAction(household);
+
+  assert.equal(result.success, false);
+  assert.equal(result.message, "You do not have a place to live");
+});
+
+test("accepted move-in updates both characters to the player's residence and creates one shared memory", () => {
+  const household = buildMoveInHousehold({
+    friendshipScore: 95,
+    romanceScore: 95,
+    yearsTogether: 4,
+    playerOwnsMultipleProperties: true,
+    partnerMovingDisposition: "wants",
+  });
+
+  const result = runMoveInTogetherAction(household);
+
+  assert.equal(result.success, true);
+  assert.equal(result.outcome, "accepted");
+  const player = getCurrentHouseholdCharacter(result.household);
+  const partner = result.household.characters.find((character) => character.id === "partner-1");
+  assert.equal(getCharacterResidence(result.household, player.id)?.id, "property-player-home");
+  assert.equal(getCharacterResidence(result.household, partner.id)?.id, "property-player-home");
+  assert.equal(player.livingSituation.type, "property");
+  assert.equal(partner.livingSituation.type, "property");
+  assert.equal(player.memories[0]?.id, partner.memories[0]?.id);
+  assert.equal(player.memories[0]?.text, "You moved in with Jamie.");
+});
+
+test("move-in state survives save/load hydration", () => {
+  const household = buildMoveInHousehold({
+    friendshipScore: 95,
+    romanceScore: 95,
+    yearsTogether: 4,
+    playerOwnsMultipleProperties: true,
+    partnerMovingDisposition: "wants",
+  });
+
+  const result = runMoveInTogetherAction(household);
+  assert.equal(result.outcome, "accepted");
+
+  const hydrated = hydrateHousehold(result.household);
+  const hydratedPlayer = getCurrentHouseholdCharacter(hydrated);
+  const hydratedPartner = hydrated.characters.find((character) => character.id === "partner-1");
+
+  assert.equal(getCharacterResidence(hydrated, hydratedPlayer.id)?.id, "property-player-home");
+  assert.equal(getCharacterResidence(hydrated, hydratedPartner.id)?.id, "property-player-home");
+});
+
+test("asking a partner to move out removes them from the player's home and rehousings them", () => {
+  const livingTogetherHousehold = runMoveInTogetherAction(
+    buildMoveInHousehold({
+      friendshipScore: 95,
+      romanceScore: 95,
+      yearsTogether: 4,
+      playerOwnsMultipleProperties: true,
+      partnerMovingDisposition: "wants",
+    })
+  ).household;
+
+  const result = runAskPartnerToMoveOutAction(livingTogetherHousehold);
+
+  assert.equal(result.success, true);
+  const playerResidence = getCharacterResidence(result.household, "player-1");
+  const partnerResidence = getCharacterResidence(result.household, "partner-1");
+  assert.equal(playerResidence?.residentIds.includes("partner-1"), false);
+  assert.notEqual(partnerResidence?.id, playerResidence?.id);
+});
+
+test("moved-out state survives save/load hydration", () => {
+  const movedOut = runAskPartnerToMoveOutAction(
+    runMoveInTogetherAction(
+      buildMoveInHousehold({
+        friendshipScore: 95,
+        romanceScore: 95,
+        yearsTogether: 4,
+        playerOwnsMultipleProperties: true,
+        partnerMovingDisposition: "wants",
+      })
+    ).household
+  );
+
+  assert.equal(movedOut.success, true);
+
+  const hydrated = hydrateHousehold(movedOut.household);
+  const hydratedPlayerResidence = getCharacterResidence(hydrated, "player-1");
+  const hydratedPartnerResidence = getCharacterResidence(hydrated, "partner-1");
+
+  assert.equal(hydratedPlayerResidence?.residentIds.includes("partner-1"), false);
+  assert.notEqual(hydratedPartnerResidence?.id, hydratedPlayerResidence?.id);
+});
+
+test("dating move-out penalties continue for two years and then stop", () => {
+  const movedOut = runAskPartnerToMoveOutAction(
+    runMoveInTogetherAction(
+      buildMoveInHousehold({
+        friendshipScore: 95,
+        romanceScore: 95,
+        yearsTogether: 3,
+        partnerMovingDisposition: "wants",
+      })
+    ).household
+  );
+  assert.equal(movedOut.success, true);
+
+  const afterMoveOutPlayer = getCurrentHouseholdCharacter(movedOut.household);
+  const afterOneYear = ageHouseholdOneYear(movedOut.household);
+  const afterOneYearPlayer = getCurrentHouseholdCharacter(afterOneYear);
+  const afterTwoYears = ageHouseholdOneYear(afterOneYear);
+  const afterTwoYearsPlayer = getCurrentHouseholdCharacter(afterTwoYears);
+  const afterThreeYears = ageHouseholdOneYear(afterTwoYears);
+  const afterThreeYearsPlayer = getCurrentHouseholdCharacter(afterThreeYears);
+
+  assert.equal(
+    afterOneYearPlayer.partner.friendshipScore < afterMoveOutPlayer.partner.friendshipScore,
+    true
+  );
+  assert.equal(
+    afterTwoYearsPlayer.partner.friendshipScore < afterOneYearPlayer.partner.friendshipScore,
+    true
+  );
+  assert.equal(
+    afterThreeYearsPlayer.partner.friendshipScore,
+    afterTwoYearsPlayer.partner.friendshipScore
+  );
+});
+
+test("friend couch move-outs are rehoused within one year", () => {
+  const livingTogetherHousehold = runMoveInTogetherAction(
+    buildMoveInHousehold({
+      friendshipScore: 95,
+      romanceScore: 95,
+      yearsTogether: 3,
+      partnerMovingDisposition: "wants",
+      partnerAnnualIncomeGBP: 0,
+      partnerBankBalanceGBP: 0,
+    })
+  ).household;
+  const householdWithFriend = {
+    ...livingTogetherHousehold,
+    characters: [
+      ...livingTogetherHousehold.characters,
+      buildCharacter({
+        id: "friend-1",
+        firstName: "Taylor",
+        gender: "Female",
+        age: 30,
+      }),
+    ].map((character) =>
+      character.id === "partner-1"
+        ? {
+            ...character,
+            friends: [
+              ...character.friends,
+              {
+                id: "friendship-1",
+                personId: "friend-1",
+                gender: "Female",
+                firstName: "Taylor",
+                lastName: "Tester",
+                age: 30,
+                relationship: 80,
+                compatibility: 70,
+                appearance: 50,
+                intelligence: 50,
+                race: "White",
+                traits: [],
+                occupation: "No job",
+                degree: null,
+                universityYearsRemaining: 0,
+              },
+            ],
+          }
+        : character
+    ),
+    properties: [
+      ...livingTogetherHousehold.properties.filter(
+        (property) => property.id !== "property-partner-home"
+      ),
+      buildProperty({
+        id: "property-friend-home",
+        residentIds: ["friend-1"],
+        ownerIds: ["friend-1"],
+        ownershipShares: { "friend-1": 100 },
+      }),
+    ],
+  };
+
+  const movedOut = runAskPartnerToMoveOutAction(householdWithFriend);
+  assert.equal(movedOut.success, true);
+  const movedOutPartner = movedOut.household.characters.find((character) => character.id === "partner-1");
+  assert.equal(movedOutPartner.livingSituation.type, "staying_with_person");
+
+  const aged = ageHouseholdOneYear(movedOut.household);
+  const agedPartner = aged.characters.find((character) => character.id === "partner-1");
+  assert.notEqual(agedPartner.livingSituation.type, "staying_with_person");
+});
+
+test("housing descriptions distinguish renting and couch surfing", () => {
+  const rentedBaseHousehold = runMoveInTogetherAction(
+    buildMoveInHousehold({
+      friendshipScore: 95,
+      romanceScore: 95,
+      yearsTogether: 3,
+      partnerMovingDisposition: "wants",
+    })
+  ).household;
+  const rentedReadyHousehold = {
+    ...rentedBaseHousehold,
+    properties: rentedBaseHousehold.properties.filter(
+      (property) => property.id !== "property-partner-home"
+    ),
+  };
+  const rentedHousehold = runAskPartnerToMoveOutAction(rentedReadyHousehold).household;
+
+  const couchBaseHousehold = runMoveInTogetherAction(
+    buildMoveInHousehold({
+      friendshipScore: 95,
+      romanceScore: 95,
+      yearsTogether: 3,
+      partnerMovingDisposition: "wants",
+      partnerAnnualIncomeGBP: 0,
+      partnerBankBalanceGBP: 0,
+    })
+  ).household;
+  const couchReadyHousehold = {
+    ...couchBaseHousehold,
+    characters: [
+      ...couchBaseHousehold.characters,
+      buildCharacter({
+        id: "friend-1",
+        firstName: "Taylor",
+        gender: "Female",
+        age: 30,
+      }),
+    ].map((character) =>
+      character.id === "partner-1"
+        ? {
+            ...character,
+            friends: [
+              ...character.friends,
+              {
+                id: "friendship-1",
+                personId: "friend-1",
+                gender: "Female",
+                firstName: "Taylor",
+                lastName: "Tester",
+                age: 30,
+                relationship: 80,
+                compatibility: 70,
+                appearance: 50,
+                intelligence: 50,
+                race: "White",
+                traits: [],
+                occupation: "No job",
+                degree: null,
+                universityYearsRemaining: 0,
+              },
+            ],
+          }
+        : character
+    ),
+    properties: [
+      ...couchBaseHousehold.properties.filter((property) => property.id !== "property-partner-home"),
+      buildProperty({
+        id: "property-friend-home",
+        residentIds: ["friend-1"],
+        ownerIds: ["friend-1"],
+        ownershipShares: { "friend-1": 100 },
+      }),
+    ],
+  };
+  const couchHousehold = runAskPartnerToMoveOutAction(couchReadyHousehold).household;
+
+  assert.equal(
+    describeCurrentLivingSituation(rentedHousehold, "partner-1"),
+    "Renting a property"
+  );
+  assert.match(
+    describeCurrentLivingSituation(couchHousehold, "partner-1"),
+    /Living on .*'s couch/
+  );
+});
+
+test("moving back in with a partner does not show as renting", () => {
+  const movedInHousehold = runMoveInTogetherAction(
+    buildMoveInHousehold({
+      friendshipScore: 95,
+      romanceScore: 95,
+      yearsTogether: 3,
+      partnerMovingDisposition: "wants",
+    })
+  ).household;
+  const movedOutHousehold = runAskPartnerToMoveOutAction({
+    ...movedInHousehold,
+    properties: movedInHousehold.properties.filter(
+      (property) => property.id !== "property-partner-home"
+    ),
+  }).household;
+  const movedBackInHousehold = runMoveInTogetherAction(movedOutHousehold).household;
+
+  assert.equal(
+    describeCurrentLivingSituation(movedBackInHousehold, "partner-1"),
+    "Living in your partner's property"
+  );
 });
 
 test("Break Up and Divorce work safely", () => {

@@ -15,6 +15,7 @@ import {
   MORTGAGE_TERM_YEARS,
 } from "./propertyFinance";
 import {
+  getCharacterOwnedProperties,
   getCharacterOwnershipShare,
   getCharacterResidence,
   getPropertyById,
@@ -38,6 +39,30 @@ export type EligibleCoBuyer = {
 };
 
 export type PurchaseMethod = "cash" | "mortgage";
+
+export type RentalMoveResult =
+  | {
+      status: "success";
+      household: Household;
+      propertyId: string;
+    }
+  | {
+      status: "cannot_afford" | "listing_not_found" | "renter_not_found";
+      household: Household;
+    };
+
+export type MoveOutRelocationReason =
+  | "family_home"
+  | "owned_property"
+  | "purchased_property"
+  | "rented_property"
+  | "friends_couch"
+  | "homeless";
+
+export type MoveOutRelocationResult = {
+  household: Household;
+  reason: MoveOutRelocationReason;
+};
 
 export type PropertyPurchaseResult =
   | {
@@ -167,6 +192,64 @@ const addCharacterToPropertyResidents = (
     residentIds: dedupeIds([...property.residentIds, characterId]),
   }));
 
+const convertListingToProperty = (
+  listing: PropertyListing,
+  overrides: Partial<Property> = {}
+): Property => ({
+  id: createId("property"),
+  bedrooms: listing.bedrooms,
+  bathrooms: listing.bathrooms,
+  valueGBP: listing.valueGBP,
+  condition: listing.condition,
+  neighbourhoodQuality:
+    listing.neighbourhoodQuality >= 85
+      ? "excellent"
+      : listing.neighbourhoodQuality >= 70
+        ? "good"
+        : listing.neighbourhoodQuality >= 50
+          ? "average"
+          : "poor",
+  ownerIds: [],
+  ownershipShares: {},
+  residentIds: [],
+  propertyUse: "residence",
+  mortgageId: null,
+  ...overrides,
+});
+
+export const moveCharactersIntoResidence = (
+  household: Household,
+  propertyId: string,
+  moverIds: string[]
+): Household => {
+  const uniqueMoverIds = dedupeIds(moverIds);
+  let nextHousehold = household;
+
+  for (const moverId of uniqueMoverIds) {
+    nextHousehold = removeCharacterFromAllPropertyResidents(nextHousehold, moverId);
+  }
+  for (const moverId of uniqueMoverIds) {
+    nextHousehold = addCharacterToPropertyResidents(nextHousehold, propertyId, moverId);
+  }
+
+  nextHousehold = replaceProperty(nextHousehold, propertyId, (property) => ({
+    ...property,
+    propertyUse: "residence",
+  }));
+
+  for (const moverId of uniqueMoverIds) {
+    nextHousehold = replaceCharacter(nextHousehold, moverId, (character) => ({
+      ...character,
+      livingSituation:
+        character.familyHomePropertyId === propertyId
+          ? { type: "family_home", propertyId }
+          : { type: "property", propertyId },
+    }));
+  }
+
+  return nextHousehold;
+};
+
 export const getFamilyHomePropertyId = (
   household: Household,
   characterId: string
@@ -286,7 +369,16 @@ export const describeCurrentLivingSituation = (
       if (ownershipShare > 0) {
         return "Living in a jointly owned property";
       }
-      return "Living in a property";
+      if (property.ownerIds.length === 0) {
+        return "Renting a property";
+      }
+
+      const partnerOwnerId = character.partner?.personId ?? null;
+      if (partnerOwnerId && property.ownerIds.includes(partnerOwnerId)) {
+        return "Living in your partner's property";
+      }
+
+      return "Living in someone else's property";
     }
   }
 };
@@ -317,6 +409,182 @@ export const getEligibleFriendHosts = (
       };
     })
     .filter((host): host is EligibleHost => host !== null);
+};
+
+export const rentPropertyForCharacter = ({
+  household,
+  renterId,
+}: {
+  household: Household;
+  renterId: string;
+}): RentalMoveResult => {
+  const renter = household.characters.find((character) => character.id === renterId) ?? null;
+  if (!renter) {
+    return {
+      status: "renter_not_found",
+      household,
+    };
+  }
+
+  const listing =
+    [...household.propertyMarket.listings]
+      .sort((left, right) => left.valueGBP - right.valueGBP)
+      .find((candidate) => renter.annualIncomeGBP >= Math.round(candidate.valueGBP * 0.08)) ?? null;
+  if (!listing) {
+    return {
+      status: "listing_not_found",
+      household,
+    };
+  }
+
+  const annualRentGBP = Math.round(listing.valueGBP * 0.08);
+  const upfrontRentGBP = Math.round(annualRentGBP / 12);
+  if (renter.bankBalanceGBP < upfrontRentGBP) {
+    return {
+      status: "cannot_afford",
+      household,
+    };
+  }
+
+  const withoutCurrentResidence = removeCharacterFromAllPropertyResidents(household, renterId);
+  const createdProperty = convertListingToProperty(listing, {
+    residentIds: [renterId],
+  });
+  const nextHousehold = replaceCharacter(
+    {
+      ...withoutCurrentResidence,
+      properties: [...withoutCurrentResidence.properties, createdProperty],
+      propertyMarket: {
+        ...withoutCurrentResidence.propertyMarket,
+        listings: withoutCurrentResidence.propertyMarket.listings.filter(
+          (item) => item.id !== listing.id
+        ),
+      },
+    },
+    renterId,
+    (character) => ({
+      ...character,
+      bankBalanceGBP: character.bankBalanceGBP - upfrontRentGBP,
+      livingSituation: {
+        type: "property",
+        propertyId: createdProperty.id,
+      },
+    })
+  );
+
+  return {
+    status: "success",
+    household: nextHousehold,
+    propertyId: createdProperty.id,
+  };
+};
+
+export const relocateCharacterAfterMoveOut = ({
+  household,
+  characterId,
+  avoidPropertyId,
+  allowFriendsCouch,
+}: {
+  household: Household;
+  characterId: string;
+  avoidPropertyId: string | null;
+  allowFriendsCouch: boolean;
+}): MoveOutRelocationResult => {
+  const character = household.characters.find((item) => item.id === characterId) ?? null;
+  if (!character) {
+    return {
+      household,
+      reason: "homeless",
+    };
+  }
+
+  const familyHomePropertyId = getFamilyHomePropertyId(household, characterId);
+  if (familyHomePropertyId && familyHomePropertyId !== avoidPropertyId) {
+    return {
+      household: moveBackHome(household, characterId),
+      reason: "family_home",
+    };
+  }
+
+  const ownedProperties = getCharacterOwnedProperties(household, characterId).filter(
+    (property) => property.id !== avoidPropertyId
+  );
+  if (ownedProperties.length > 0) {
+    const targetProperty = ownedProperties[0];
+    return {
+      household: moveCharactersIntoResidence(household, targetProperty.id, [characterId]),
+      reason: "owned_property",
+    };
+  }
+
+  const affordableListing =
+    [...household.propertyMarket.listings]
+      .sort((left, right) => left.valueGBP - right.valueGBP)
+      .find((listing) => {
+        const cashShare = listing.valueGBP;
+        const depositGBP = getMinimumMortgageDepositGBP(listing.valueGBP);
+        const annualRepaymentGBP = calculateAnnualMortgageRepaymentGBP(
+          listing.valueGBP - depositGBP
+        );
+
+        return (
+          character.bankBalanceGBP >= cashShare ||
+          (character.bankBalanceGBP >= depositGBP &&
+            annualRepaymentGBP <= getAffordableAnnualHousingPaymentGBP(character.annualIncomeGBP))
+        );
+      }) ?? null;
+
+  if (affordableListing) {
+    const purchaseMethod =
+      character.bankBalanceGBP >= affordableListing.valueGBP ? "cash" : "mortgage";
+    const purchased = purchaseProperty({
+      household,
+      listingId: affordableListing.id,
+      buyerId: characterId,
+      coBuyerId: null,
+      purchaseMethod,
+    });
+    if (purchased.status === "success") {
+      return {
+        household: applyPurchasedPropertyDecision({
+          household: purchased.household,
+          propertyId: purchased.propertyId,
+          buyerId: characterId,
+          coBuyerId: null,
+          action: "live_here",
+        }),
+        reason: "purchased_property",
+      };
+    }
+  }
+
+  const rented = rentPropertyForCharacter({
+    household,
+    renterId: characterId,
+  });
+  if (rented.status === "success") {
+    return {
+      household: rented.household,
+      reason: "rented_property",
+    };
+  }
+
+  if (allowFriendsCouch) {
+    const eligibleHosts = getEligibleFriendHosts(household, characterId).filter(
+      (host) => host.propertyId !== avoidPropertyId
+    );
+    if (eligibleHosts.length > 0) {
+      return {
+        household: stayWithHost(household, characterId, eligibleHosts[0].hostId),
+        reason: "friends_couch",
+      };
+    }
+  }
+
+  return {
+    household: leaveCurrentResidenceWithoutReplacement(household, characterId),
+    reason: "homeless",
+  };
 };
 
 export const getEligibleSiblingHosts = (
@@ -676,29 +944,11 @@ export const applyPurchasedPropertyDecision = ({
     }));
   }
 
-  const moverIds = dedupeIds([buyerId, coBuyerId ?? ""]);
-  for (const moverId of moverIds) {
-    nextHousehold = removeCharacterFromAllPropertyResidents(nextHousehold, moverId);
-  }
-  for (const moverId of moverIds) {
-    nextHousehold = addCharacterToPropertyResidents(nextHousehold, propertyId, moverId);
-  }
-  nextHousehold = replaceProperty(nextHousehold, propertyId, (property) => ({
-    ...property,
-    propertyUse: "residence",
-  }));
-
-  for (const moverId of moverIds) {
-    nextHousehold = replaceCharacter(nextHousehold, moverId, (character) => ({
-      ...character,
-      livingSituation:
-        character.familyHomePropertyId === propertyId
-          ? { type: "family_home", propertyId }
-          : { type: "property", propertyId },
-    }));
-  }
-
-  return nextHousehold;
+  return moveCharactersIntoResidence(
+    nextHousehold,
+    propertyId,
+    dedupeIds([buyerId, coBuyerId ?? ""])
+  );
 };
 
 export const processAnnualMortgagePayments = (household: Household): Household => {

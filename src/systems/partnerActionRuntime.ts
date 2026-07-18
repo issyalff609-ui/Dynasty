@@ -1,12 +1,36 @@
-import { getCharacterResidence, getCurrentHouseholdCharacter } from "./household";
+import { createMemory } from "../generators/characterGenerator";
+import { addDiaryEntryIfMissing } from "./person";
 import {
+  getCharacterOwnedProperties,
+  getCharacterOwnershipShare,
+  getCharacterResidence,
+  getCurrentHouseholdCharacter,
+} from "./household";
+import {
+  moveCharactersIntoResidence,
+  relocateCharacterAfterMoveOut,
+} from "./property";
+import {
+  applyRelationshipScoreDelta,
   askPartnerForSpace,
   bickerWithPartner,
   breakUpOrDivorcePartner,
+  clearRelationshipSpaceStatus,
   confrontPartnerAboutIssue,
   getActiveRomanticRelationshipBetween,
+  getActiveRelationshipYearsTogetherBetween,
+  getMoveInAgeModifier,
+  getMoveInDispositionModifier,
+  getMoveInOutcomeFromReadiness,
+  getMoveInRelationshipStatusModifier,
+  getMoveInYearsTogetherModifier,
+  getRelationshipQualityForMoveIn,
   goOnDate,
   haveConversationAbout,
+  MOVE_IN_FINANCIAL_STABILITY_MODIFIERS,
+  MOVE_IN_HOUSING_MODIFIERS,
+  MOVE_OUT_IMMEDIATE_PENALTIES,
+  setRelationshipSpaceStatus,
   spendTimeTogether,
 } from "./relationships";
 import { formatMoney } from "../utils/money";
@@ -16,7 +40,9 @@ import type {
   PartnerBoundaryConversationTopic,
   PartnerConversationTopic,
   PartnerDateCategory,
+  PartnerMoveInOutcome,
 } from "../types/relationships";
+import { randomInt } from "../utils/random";
 
 export type MutableRefLike<T> = {
   current: T;
@@ -39,6 +65,7 @@ type HouseholdActionResult = {
   household: Household;
   message: string;
   reason?: "partner-unavailable" | "action-unavailable";
+  outcome?: PartnerMoveInOutcome;
   closeDateMenu?: boolean;
   closeBoundaryMenu?: boolean;
 };
@@ -193,6 +220,335 @@ export const resolveCurrentPartnerContext = (
   };
 };
 
+const getMoveInHousingStabilityModifier = (
+  household: Household,
+  currentCharacter: Character
+) => {
+  const ownedProperties = getCharacterOwnedProperties(household, currentCharacter.id);
+  const currentResidence = getCharacterResidence(household, currentCharacter.id);
+
+  if (
+    currentResidence &&
+    getCharacterOwnershipShare(currentResidence, currentCharacter.id) > 0
+  ) {
+    return ownedProperties.length > 1
+      ? MOVE_IN_HOUSING_MODIFIERS.ownsMultipleProperties
+      : MOVE_IN_HOUSING_MODIFIERS.ownsSuitableProperty;
+  }
+
+  if (currentCharacter.livingSituation.type === "family_home") {
+    return MOVE_IN_HOUSING_MODIFIERS.livingWithParents;
+  }
+
+  if (currentCharacter.livingSituation.type === "staying_with_person") {
+    return MOVE_IN_HOUSING_MODIFIERS.stayingWithSomeoneElse;
+  }
+
+  return MOVE_IN_HOUSING_MODIFIERS.renting;
+};
+
+const getMoveInFinancialStabilityModifier = (
+  currentCharacter: Character,
+  partnerCharacter: Character
+) => {
+  const combinedAnnualIncomeGBP =
+    currentCharacter.annualIncomeGBP + partnerCharacter.annualIncomeGBP;
+  const combinedBankBalanceGBP =
+    currentCharacter.bankBalanceGBP + partnerCharacter.bankBalanceGBP;
+
+  if (combinedAnnualIncomeGBP >= 90000 || combinedBankBalanceGBP >= 20000) {
+    return MOVE_IN_FINANCIAL_STABILITY_MODIFIERS.strong;
+  }
+  if (combinedAnnualIncomeGBP >= 40000 || combinedBankBalanceGBP >= 5000) {
+    return MOVE_IN_FINANCIAL_STABILITY_MODIFIERS.stable;
+  }
+  if (combinedAnnualIncomeGBP > 0 || combinedBankBalanceGBP >= 1000) {
+    return MOVE_IN_FINANCIAL_STABILITY_MODIFIERS.modest;
+  }
+
+  return MOVE_IN_FINANCIAL_STABILITY_MODIFIERS.insecure;
+};
+
+const buildMoveInMemoryText = (
+  outcome: PartnerMoveInOutcome,
+  partnerName: string
+) => {
+  if (outcome === "accepted") {
+    return `You moved in with ${partnerName}.`;
+  }
+  if (outcome === "hesitant") {
+    return `You wanted ${partnerName} to move in with you.`;
+  }
+
+  return `You asked ${partnerName} to move in but they refused.`;
+};
+
+const buildMoveOutMemoryText = (
+  relationshipStatus: "Dating" | "Engaged" | "Married",
+  partnerName: string
+) =>
+  relationshipStatus === "Dating"
+    ? `${partnerName} moved out.`
+    : relationshipStatus === "Engaged"
+      ? `${partnerName} moved out after you asked them to leave.`
+      : `${partnerName} moved out of your home.`;
+
+export const runMoveInTogetherAction = (
+  household: Household
+): HouseholdActionResult => {
+  const context = resolveCurrentPartnerContext(household);
+  if (!context.success) {
+    return {
+      success: false,
+      household,
+      message: context.error,
+      reason: "partner-unavailable",
+    };
+  }
+
+  const { currentCharacter, partnerCharacter } = context;
+  const currentResidence = getCharacterResidence(household, currentCharacter.id);
+  if (!currentResidence || currentCharacter.livingSituation.type === "homeless") {
+    return {
+      success: false,
+      household,
+      message: "You do not have a place to live",
+      reason: "action-unavailable",
+    };
+  }
+
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(currentCharacter, partnerCharacter.id) ??
+    getActiveRomanticRelationshipBetween(partnerCharacter, currentCharacter.id);
+  if (!activeRelationship) {
+    return {
+      success: false,
+      household,
+      message: "This relationship decision could not be made right now.",
+      reason: "action-unavailable",
+    };
+  }
+
+  const relationshipStatus = activeRelationship.currentStatus;
+  const yearsTogether =
+    getActiveRelationshipYearsTogetherBetween(
+      currentCharacter,
+      partnerCharacter.id,
+      household.currentYear
+    ) ?? 0;
+  const relationshipQuality = getRelationshipQualityForMoveIn(
+    currentCharacter,
+    partnerCharacter
+  );
+  const readinessScore =
+    relationshipQuality +
+    getMoveInYearsTogetherModifier(yearsTogether) +
+    getMoveInAgeModifier(partnerCharacter.age) +
+    getMoveInHousingStabilityModifier(household, currentCharacter) +
+    getMoveInFinancialStabilityModifier(currentCharacter, partnerCharacter) +
+    (relationshipStatus === "Dating" || relationshipStatus === "Engaged"
+      ? getMoveInRelationshipStatusModifier(relationshipStatus)
+      : 0) +
+    getMoveInDispositionModifier(partnerCharacter);
+
+  const outcome: PartnerMoveInOutcome =
+    relationshipStatus === "Married"
+      ? "accepted"
+      : getMoveInOutcomeFromReadiness(readinessScore);
+  const memoryText = buildMoveInMemoryText(outcome, partnerCharacter.firstName);
+  const sharedMemory = createMemory(memoryText, {
+    relationshipId: activeRelationship.id,
+    partnerId: partnerCharacter.id,
+    year: household.currentYear,
+    characterIds: [currentCharacter.id, partnerCharacter.id],
+  });
+
+  const message =
+    outcome === "accepted"
+      ? `You and ${partnerCharacter.firstName} are now living together.`
+      : outcome === "hesitant"
+        ? `${partnerCharacter.firstName} was hesitant and wants to wait a little longer before making that change.`
+        : `${partnerCharacter.firstName} thinks that you are at different stages in life and does not want to move in with you.`;
+
+  if (outcome !== "accepted") {
+    const updatedPlayer = addDiaryEntryIfMissing(
+      {
+        ...currentCharacter,
+        memories: [sharedMemory, ...currentCharacter.memories].slice(0, 20),
+      },
+      household.currentYear,
+      memoryText,
+      "relationship"
+    );
+    const updatedPartner = addDiaryEntryIfMissing(
+      {
+        ...partnerCharacter,
+        memories: [{ ...sharedMemory }, ...partnerCharacter.memories].slice(0, 20),
+      },
+      household.currentYear,
+      memoryText,
+      "relationship"
+    );
+
+    return {
+      success: true,
+      household: replaceCharactersInHousehold(household, [updatedPlayer, updatedPartner]),
+      message,
+      outcome,
+    };
+  }
+
+  const movedHousehold = moveCharactersIntoResidence(household, currentResidence.id, [
+    currentCharacter.id,
+    partnerCharacter.id,
+  ]);
+  const movedPlayer = movedHousehold.characters.find(
+    (character) => character.id === currentCharacter.id
+  ) as Character;
+  const movedPartner = movedHousehold.characters.find(
+    (character) => character.id === partnerCharacter.id
+  ) as Character;
+  const [cohabitingPlayer, cohabitingPartner] = clearRelationshipSpaceStatus(
+    movedPlayer,
+    movedPartner
+  );
+  const updatedPlayer = addDiaryEntryIfMissing(
+    {
+      ...cohabitingPlayer,
+      memories: [sharedMemory, ...cohabitingPlayer.memories].slice(0, 20),
+    },
+    household.currentYear,
+    memoryText,
+    "relationship"
+  );
+  const updatedPartner = addDiaryEntryIfMissing(
+    {
+      ...cohabitingPartner,
+      memories: [{ ...sharedMemory }, ...cohabitingPartner.memories].slice(0, 20),
+    },
+    household.currentYear,
+    memoryText,
+    "relationship"
+  );
+
+  return {
+    success: true,
+    household: replaceCharactersInHousehold(movedHousehold, [updatedPlayer, updatedPartner]),
+    message,
+    outcome,
+  };
+};
+
+export const runAskPartnerToMoveOutAction = (
+  household: Household
+): HouseholdActionResult => {
+  const context = resolveCurrentPartnerContext(household);
+  if (!context.success) {
+    return {
+      success: false,
+      household,
+      message: context.error,
+      reason: "partner-unavailable",
+    };
+  }
+
+  const { currentCharacter, partnerCharacter, livesTogether } = context;
+  if (!livesTogether) {
+    return {
+      success: false,
+      household,
+      message: "Your partner does not live with you.",
+      reason: "action-unavailable",
+    };
+  }
+
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(currentCharacter, partnerCharacter.id) ??
+    getActiveRomanticRelationshipBetween(partnerCharacter, currentCharacter.id);
+  if (
+    !activeRelationship ||
+    (activeRelationship.currentStatus !== "Dating" &&
+      activeRelationship.currentStatus !== "Engaged" &&
+      activeRelationship.currentStatus !== "Married")
+  ) {
+    return {
+      success: false,
+      household,
+      message: "This move-out decision could not happen right now.",
+      reason: "action-unavailable",
+    };
+  }
+
+  const immediatePenalty = MOVE_OUT_IMMEDIATE_PENALTIES[activeRelationship.currentStatus];
+  const friendshipChange = randomInt(
+    immediatePenalty.friendship[0],
+    immediatePenalty.friendship[1]
+  );
+  const romanceChange = randomInt(
+    immediatePenalty.romance[0],
+    immediatePenalty.romance[1]
+  );
+  const [penalizedPlayer, penalizedPartner] = applyRelationshipScoreDelta(
+    currentCharacter,
+    partnerCharacter,
+    friendshipChange,
+    romanceChange
+  );
+  const [trackedPlayer, trackedPartner] = setRelationshipSpaceStatus(
+    penalizedPlayer,
+    penalizedPartner,
+    household.currentYear,
+    activeRelationship.currentStatus,
+    partnerCharacter.id
+  );
+  const rehomed = relocateCharacterAfterMoveOut({
+    household: replaceCharactersInHousehold(household, [trackedPlayer, trackedPartner]),
+    characterId: partnerCharacter.id,
+    avoidPropertyId: getCharacterResidence(household, currentCharacter.id)?.id ?? null,
+    allowFriendsCouch: true,
+  });
+  const latestPlayer =
+    rehomed.household.characters.find((character) => character.id === currentCharacter.id) ??
+    trackedPlayer;
+  const latestPartner =
+    rehomed.household.characters.find((character) => character.id === partnerCharacter.id) ??
+    trackedPartner;
+  const memoryText = buildMoveOutMemoryText(
+    activeRelationship.currentStatus,
+    partnerCharacter.firstName
+  );
+  const sharedMemory = createMemory(memoryText, {
+    relationshipId: activeRelationship.id,
+    partnerId: partnerCharacter.id,
+    year: household.currentYear,
+    characterIds: [currentCharacter.id, partnerCharacter.id],
+  });
+  const updatedPlayer = addDiaryEntryIfMissing(
+    {
+      ...latestPlayer,
+      memories: [sharedMemory, ...latestPlayer.memories].slice(0, 20),
+    },
+    household.currentYear,
+    memoryText,
+    "relationship"
+  );
+  const updatedPartner = addDiaryEntryIfMissing(
+    {
+      ...latestPartner,
+      memories: [{ ...sharedMemory }, ...latestPartner.memories].slice(0, 20),
+    },
+    household.currentYear,
+    memoryText,
+    "relationship"
+  );
+
+  return {
+    success: true,
+    household: replaceCharactersInHousehold(rehomed.household, [updatedPlayer, updatedPartner]),
+    message: `${partnerCharacter.firstName} moved out.\n\nFriendship ${friendshipChange}\nRomance ${romanceChange}`,
+  };
+};
+
 export const runPartnerDateAction = (
   household: Household,
   category: PartnerDateCategory
@@ -280,7 +636,7 @@ export const runPartnerConversationAction = (
   return {
     success: true,
     household: replaceCharactersInHousehold(household, [result.person, result.otherPerson]),
-    message: `${result.result.text}\n\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}`,
+    message: result.result.text,
     closeBoundaryMenu: topic === "boundaries",
   };
 };
