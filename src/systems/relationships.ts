@@ -276,7 +276,17 @@ const updateMirroredRelationship = (
   const currentRelationship =
     getRomanticRelationshipBetween(person, otherPerson.id) ??
     getRomanticRelationshipBetween(otherPerson, person.id);
-  const nextRelationship = buildNextRelationship(currentRelationship);
+  const currentScores = resolveRelationshipScoreState(person, otherPerson, currentRelationship);
+  const builtRelationship = buildNextRelationship(currentRelationship);
+  const nextScores =
+    hasFiniteRelationshipScore(builtRelationship.friendshipScore) &&
+    hasFiniteRelationshipScore(builtRelationship.romanceScore)
+      ? {
+          friendshipScore: builtRelationship.friendshipScore,
+          romanceScore: builtRelationship.romanceScore,
+        }
+      : currentScores;
+  const nextRelationship = applyRelationshipScores(builtRelationship, nextScores);
 
   return [
     upsertRomanticRelationship(person, {
@@ -292,6 +302,135 @@ const updateMirroredRelationship = (
 
 const createRomanticRelationshipId = () =>
   `romance-${Math.random().toString(36).slice(2, 10)}`;
+
+type RelationshipScoreState = {
+  friendshipScore: number;
+  romanceScore: number;
+};
+
+type RelationshipScoreSource =
+  | "relationship"
+  | "person_partner"
+  | "other_partner"
+  | "relationship_scores"
+  | "defaults";
+
+const hasFiniteRelationshipScore = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const clampRelationshipScore = (value: number) => clamp(Math.round(value), 0, 100);
+
+const applyRelationshipScores = (
+  relationship: RomanticRelationship,
+  scores: RelationshipScoreState
+): RomanticRelationship => ({
+  ...relationship,
+  friendshipScore: clampRelationshipScore(scores.friendshipScore),
+  romanceScore: clampRelationshipScore(scores.romanceScore),
+});
+
+const getStoredPartnerProfileFor = (person: Character, otherPersonId: string) =>
+  person.partner?.personId === otherPersonId ? person.partner : null;
+
+const getLegacyRelationshipScoreValue = (
+  person: Character,
+  otherPersonId: string
+) => {
+  const rawScore = person.relationshipScores[otherPersonId];
+  return hasFiniteRelationshipScore(rawScore) ? clampRelationshipScore(rawScore) : null;
+};
+
+export const resolveRelationshipScoreState = (
+  person: Character,
+  otherPerson: Character,
+  relationship?:
+    | RomanticRelationship
+    | null
+): RelationshipScoreState & {
+  source: RelationshipScoreSource;
+} => {
+  const resolvedRelationship =
+    relationship ??
+    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(otherPerson, person.id) ??
+    getRomanticRelationshipBetween(person, otherPerson.id) ??
+    getRomanticRelationshipBetween(otherPerson, person.id);
+
+  // Invariant: once a relationship is active, the mirrored RomanticRelationship
+  // pair is the only authoritative Friendship/Romance store. partner views are
+  // rebuilt from these values and may not diverge independently.
+  if (
+    resolvedRelationship &&
+    hasFiniteRelationshipScore(resolvedRelationship.friendshipScore) &&
+    hasFiniteRelationshipScore(resolvedRelationship.romanceScore)
+  ) {
+    return {
+      source: "relationship",
+      friendshipScore: clampRelationshipScore(resolvedRelationship.friendshipScore),
+      romanceScore: clampRelationshipScore(resolvedRelationship.romanceScore),
+    };
+  }
+
+  const personPartner = getStoredPartnerProfileFor(person, otherPerson.id);
+  if (
+    personPartner &&
+    hasFiniteRelationshipScore(personPartner.friendshipScore) &&
+    hasFiniteRelationshipScore(personPartner.romanceScore)
+  ) {
+    return {
+      source: "person_partner",
+      friendshipScore: clampRelationshipScore(personPartner.friendshipScore),
+      romanceScore: clampRelationshipScore(personPartner.romanceScore),
+    };
+  }
+
+  const otherPartner = getStoredPartnerProfileFor(otherPerson, person.id);
+  if (
+    otherPartner &&
+    hasFiniteRelationshipScore(otherPartner.friendshipScore) &&
+    hasFiniteRelationshipScore(otherPartner.romanceScore)
+  ) {
+    return {
+      source: "other_partner",
+      friendshipScore: clampRelationshipScore(otherPartner.friendshipScore),
+      romanceScore: clampRelationshipScore(otherPartner.romanceScore),
+    };
+  }
+
+  const legacyRelationshipScore =
+    getLegacyRelationshipScoreValue(person, otherPerson.id) ??
+    getLegacyRelationshipScoreValue(otherPerson, person.id);
+  if (legacyRelationshipScore !== null) {
+    return {
+      source: "relationship_scores",
+      friendshipScore: legacyRelationshipScore,
+      romanceScore: legacyRelationshipScore,
+    };
+  }
+
+  return {
+    source: "defaults",
+    friendshipScore: 0,
+    romanceScore: 0,
+  };
+};
+
+const resolveRelationshipMetadataSource = (
+  person: Character,
+  otherPerson: Character
+) =>
+  getStoredPartnerProfileFor(person, otherPerson.id) ??
+  getStoredPartnerProfileFor(otherPerson, person.id) ??
+  person.datingMatches.find(
+    (match) =>
+      match.personId === otherPerson.id ||
+      (match.firstName === otherPerson.firstName && match.lastName === otherPerson.lastName)
+  ) ??
+  otherPerson.datingMatches.find(
+    (match) =>
+      match.personId === person.id ||
+      (match.firstName === person.firstName && match.lastName === person.lastName)
+  );
 
 const buildSpendTimeTogetherText = (partnerName: string) =>
   pickOne([
@@ -311,21 +450,18 @@ export const buildMirroredPartnerProfile = (
   person: Character,
   otherPerson: Character
 ) => {
-  if (
-    person.partner &&
-    person.partner.personId === otherPerson.id
-  ) {
-    return person.partner;
-  }
-
-  if (!otherPerson.partner || otherPerson.partner.personId !== person.id) {
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(otherPerson, person.id);
+  if (!activeRelationship) {
     return null;
   }
 
-  const sourcePartner = otherPerson.partner;
+  const scores = resolveRelationshipScoreState(person, otherPerson, activeRelationship);
+  const sourcePartner = resolveRelationshipMetadataSource(person, otherPerson);
 
   return {
-    id: sourcePartner.id,
+    id: sourcePartner?.id ?? activeRelationship.id,
     personId: otherPerson.id,
     firstName: otherPerson.firstName,
     lastName: otherPerson.lastName,
@@ -339,17 +475,221 @@ export const buildMirroredPartnerProfile = (
     careerCeiling: otherPerson.careerCeiling,
     degree: otherPerson.degree,
     traits: otherPerson.traits,
-    attractiveness: sourcePartner.attractiveness,
-    chemistry: sourcePartner.chemistry,
-    chemistryUnlocked: sourcePartner.chemistryUnlocked,
-    matched: sourcePartner.matched,
-    interacted: sourcePartner.interacted,
-    friendshipScore: sourcePartner.friendshipScore,
-    romanceScore: sourcePartner.romanceScore,
-    matchChanceRandomness: sourcePartner.matchChanceRandomness,
-    roseMatchBoost: sourcePartner.roseMatchBoost,
-    datingCharacteristics: sourcePartner.datingCharacteristics,
+    attractiveness: sourcePartner?.attractiveness ?? otherPerson.appearance,
+    chemistry: sourcePartner?.chemistry ?? null,
+    chemistryUnlocked: sourcePartner?.chemistryUnlocked ?? false,
+    matched: sourcePartner?.matched ?? true,
+    interacted: sourcePartner?.interacted ?? true,
+    friendshipScore: scores.friendshipScore,
+    romanceScore: scores.romanceScore,
+    matchChanceRandomness: sourcePartner?.matchChanceRandomness ?? 0,
+    roseMatchBoost: sourcePartner?.roseMatchBoost ?? 0,
+    datingCharacteristics: sourcePartner?.datingCharacteristics ?? [],
   } satisfies DatingProfile;
+};
+
+export const syncPartnerViewsForPair = (
+  person: Character,
+  otherPerson: Character
+): [Character, Character] => {
+  const personPartner = buildMirroredPartnerProfile(person, otherPerson);
+  const otherPartner = buildMirroredPartnerProfile(otherPerson, person);
+
+  return [
+    {
+      ...person,
+      partner: personPartner,
+    },
+    {
+      ...otherPerson,
+      partner: otherPartner,
+    },
+  ];
+};
+
+const cloneRelationshipForPerson = (
+  relationship: RomanticRelationship,
+  personId: string
+): RomanticRelationship => ({
+  ...relationship,
+  personId,
+});
+
+const upsertMirroredRelationshipPair = (
+  person: Character,
+  otherPerson: Character,
+  relationship: RomanticRelationship,
+  scores: RelationshipScoreState
+): [Character, Character] => {
+  const relationshipForPerson = applyRelationshipScores(
+    cloneRelationshipForPerson(relationship, otherPerson.id),
+    scores
+  );
+  const relationshipForOtherPerson = applyRelationshipScores(
+    cloneRelationshipForPerson(relationship, person.id),
+    scores
+  );
+
+  return [
+    upsertRomanticRelationship(person, relationshipForPerson),
+    upsertRomanticRelationship(otherPerson, relationshipForOtherPerson),
+  ];
+};
+
+export const repairRomanticPair = (
+  person: Character,
+  otherPerson: Character
+): [Character, Character] | null => {
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(otherPerson, person.id);
+  if (!activeRelationship) {
+    return null;
+  }
+
+  const scores = resolveRelationshipScoreState(person, otherPerson, activeRelationship);
+  const [pairedPerson, pairedOtherPerson] = upsertMirroredRelationshipPair(
+    person,
+    otherPerson,
+    activeRelationship,
+    scores
+  );
+  const [syncedPerson, syncedOtherPerson] = syncPartnerViewsForPair(
+    pairedPerson,
+    pairedOtherPerson
+  );
+
+  return [
+    {
+      ...syncedPerson,
+      datingMatches: syncedPerson.datingMatches.filter(
+        (match) => match.personId !== otherPerson.id
+      ),
+    },
+    {
+      ...syncedOtherPerson,
+      datingMatches: syncedOtherPerson.datingMatches.filter(
+        (match) => match.personId !== person.id
+      ),
+    },
+  ];
+};
+
+export type RomanticPairConsistencyIssueCode =
+  | "partner_without_active_relationship"
+  | "active_relationship_missing_character"
+  | "missing_mirrored_relationship"
+  | "partner_view_mismatch"
+  | "relationship_score_mismatch"
+  | "relationship_status_mismatch"
+  | "active_partner_still_in_dating_matches"
+  | "relationship_ended_but_partner_present";
+
+export type RomanticPairConsistencyIssue = {
+  code: RomanticPairConsistencyIssueCode;
+  personId: string;
+  otherPersonId: string | null;
+};
+
+export const validateRomanticPairConsistency = (
+  household: Household
+): RomanticPairConsistencyIssue[] => {
+  const issues: RomanticPairConsistencyIssue[] = [];
+
+  household.characters.forEach((person) => {
+    const activeRelationship = getActiveRomanticRelationship(person);
+    const partnerPersonId = person.partner?.personId ?? null;
+
+    if (partnerPersonId && !activeRelationship) {
+      issues.push({
+        code: "partner_without_active_relationship",
+        personId: person.id,
+        otherPersonId: partnerPersonId,
+      });
+    }
+
+    if (activeRelationship && !household.characters.some((item) => item.id === activeRelationship.personId)) {
+      issues.push({
+        code: "active_relationship_missing_character",
+        personId: person.id,
+        otherPersonId: activeRelationship.personId,
+      });
+      return;
+    }
+
+    if (!activeRelationship) {
+      if (person.partner) {
+        issues.push({
+          code: "relationship_ended_but_partner_present",
+          personId: person.id,
+          otherPersonId: person.partner.personId,
+        });
+      }
+      return;
+    }
+
+    const otherPerson =
+      household.characters.find((item) => item.id === activeRelationship.personId) ?? null;
+    if (!otherPerson) {
+      return;
+    }
+
+    const mirroredRelationship = getActiveRomanticRelationshipBetween(otherPerson, person.id);
+    if (!mirroredRelationship) {
+      issues.push({
+        code: "missing_mirrored_relationship",
+        personId: person.id,
+        otherPersonId: otherPerson.id,
+      });
+      return;
+    }
+
+    if (activeRelationship.currentStatus !== mirroredRelationship.currentStatus) {
+      issues.push({
+        code: "relationship_status_mismatch",
+        personId: person.id,
+        otherPersonId: otherPerson.id,
+      });
+    }
+
+    const scores = resolveRelationshipScoreState(person, otherPerson, activeRelationship);
+    if (
+      person.partner?.personId !== otherPerson.id ||
+      otherPerson.partner?.personId !== person.id
+    ) {
+      issues.push({
+        code: "partner_view_mismatch",
+        personId: person.id,
+        otherPersonId: otherPerson.id,
+      });
+    }
+
+    if (
+      (person.partner?.friendshipScore ?? scores.friendshipScore) !== scores.friendshipScore ||
+      (otherPerson.partner?.friendshipScore ?? scores.friendshipScore) !== scores.friendshipScore ||
+      (person.partner?.romanceScore ?? scores.romanceScore) !== scores.romanceScore ||
+      (otherPerson.partner?.romanceScore ?? scores.romanceScore) !== scores.romanceScore
+    ) {
+      issues.push({
+        code: "relationship_score_mismatch",
+        personId: person.id,
+        otherPersonId: otherPerson.id,
+      });
+    }
+
+    if (
+      person.datingMatches.some((match) => match.personId === otherPerson.id) ||
+      otherPerson.datingMatches.some((match) => match.personId === person.id)
+    ) {
+      issues.push({
+        code: "active_partner_still_in_dating_matches",
+        personId: person.id,
+        otherPersonId: otherPerson.id,
+      });
+    }
+  });
+
+  return issues;
 };
 
 const updatePartnerRelationshipScores = (
@@ -358,20 +698,34 @@ const updatePartnerRelationshipScores = (
   friendshipChange: number,
   romanceChange: number
 ) => {
-  const partnerProfile = buildMirroredPartnerProfile(person, otherPerson);
-
-  if (!partnerProfile) {
-    return person;
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(person, otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(otherPerson, person.id);
+  if (!activeRelationship) {
+    return [person, otherPerson] as const;
   }
 
-  return {
-    ...person,
-    partner: {
-      ...partnerProfile,
-      friendshipScore: clamp(partnerProfile.friendshipScore + friendshipChange, 0, 100),
-      romanceScore: clamp(partnerProfile.romanceScore + romanceChange, 0, 100),
-    },
+  const currentScores = resolveRelationshipScoreState(person, otherPerson, activeRelationship);
+  const nextScores = {
+    friendshipScore: clampRelationshipScore(
+      currentScores.friendshipScore + friendshipChange
+    ),
+    romanceScore: clampRelationshipScore(currentScores.romanceScore + romanceChange),
   };
+  const [updatedPerson, updatedOtherPerson] = updateMirroredRelationship(
+    person,
+    otherPerson,
+    (currentRelationship) =>
+      applyRelationshipScores(
+        {
+          ...(currentRelationship ?? activeRelationship),
+          personId: otherPerson.id,
+        },
+        nextScores
+      )
+  );
+
+  return syncPartnerViewsForPair(updatedPerson, updatedOtherPerson);
 };
 
 const getPartnerDisplayName = (person: Character) => person.firstName;
@@ -1143,7 +1497,8 @@ export const getAvailablePartnerConversationTopics = (
 export const startDating = (
   person: Character,
   otherPerson: Character,
-  currentYear: number
+  currentYear: number,
+  initialScores?: RelationshipScoreState
 ): [Character, Character] => {
   const latestRelationship =
     getRomanticRelationshipBetween(person, otherPerson.id) ??
@@ -1154,6 +1509,8 @@ export const startDating = (
       return {
         id: createRomanticRelationshipId(),
         personId: otherPerson.id,
+        friendshipScore: initialScores?.friendshipScore ?? 0,
+        romanceScore: initialScores?.romanceScore ?? 0,
         currentStatus: "Dating",
         startYear: currentYear,
         engagementYear: null,
@@ -1168,6 +1525,14 @@ export const startDating = (
     return {
       id: currentRelationship?.id ?? createRomanticRelationshipId(),
       personId: otherPerson.id,
+      friendshipScore:
+        initialScores?.friendshipScore ??
+        currentRelationship?.friendshipScore ??
+        0,
+      romanceScore:
+        initialScores?.romanceScore ??
+        currentRelationship?.romanceScore ??
+        0,
       currentStatus: "Dating",
       startYear: currentRelationship?.startYear ?? currentYear,
       engagementYear: currentRelationship?.engagementYear ?? null,
@@ -1277,21 +1642,17 @@ export const spendTimeTogether = (
     friendshipChange,
     romanceChange,
   };
+  const [nextPerson, nextOtherPerson] = updatePartnerRelationshipScores(
+    person,
+    otherPerson,
+    friendshipChange,
+    romanceChange
+  );
 
   return {
-    person: updatePartnerRelationshipScores(
-      person,
-      otherPerson,
-      friendshipChange,
-      romanceChange
-    ),
-    otherPerson: updatePartnerRelationshipScores(
-      otherPerson,
-      person,
-      friendshipChange,
-      romanceChange
-    ),
-      result,
+    person: nextPerson,
+    otherPerson: nextOtherPerson,
+    result,
   };
 };
 
@@ -1333,30 +1694,25 @@ export const goOnDate = (
     return resolvedDate;
   }
 
+  const [datedPerson, datedOtherPerson] = updatePartnerRelationshipScores(
+    person,
+    otherPerson,
+    resolvedDate.result.friendshipChange,
+    resolvedDate.result.romanceChange
+  );
   const nextPerson = maybeCreateDateMemory(
     {
-      ...updatePartnerRelationshipScores(
-        person,
-        otherPerson,
-        resolvedDate.result.friendshipChange,
-        resolvedDate.result.romanceChange
-      ),
+      ...datedPerson,
       bankBalanceGBP: person.bankBalanceGBP - resolvedDate.result.costGBP,
     },
     resolvedDate.memoryText,
     resolvedDate.memoryChance
   );
-  const nextOtherPerson = updatePartnerRelationshipScores(
-    otherPerson,
-    person,
-    resolvedDate.result.friendshipChange,
-    resolvedDate.result.romanceChange
-  );
 
   return {
     success: true,
     person: nextPerson,
-    otherPerson: nextOtherPerson,
+    otherPerson: datedOtherPerson,
     result: resolvedDate.result,
   };
 };
@@ -1501,20 +1857,16 @@ export const confrontPartnerAboutIssue = (
   }
 
   const { friendshipChange, romanceChange } = rollConflictChanges(getConflictTier(person));
+  const [nextPerson, nextOtherPerson] = updatePartnerRelationshipScores(
+    person,
+    otherPerson,
+    friendshipChange,
+    romanceChange
+  );
 
   return {
-    person: updatePartnerRelationshipScores(
-      person,
-      otherPerson,
-      friendshipChange,
-      romanceChange
-    ),
-    otherPerson: updatePartnerRelationshipScores(
-      otherPerson,
-      person,
-      friendshipChange,
-      romanceChange
-    ),
+    person: nextPerson,
+    otherPerson: nextOtherPerson,
     result: {
       friendshipChange,
       romanceChange,
@@ -1560,9 +1912,14 @@ export const askPartnerForSpace = (
     })
   );
 
+  const [syncedPerson, syncedOtherPerson] = syncPartnerViewsForPair(
+    nextPerson,
+    nextOtherPerson
+  );
+
   return {
-    person: nextPerson,
-    otherPerson: nextOtherPerson,
+    person: syncedPerson,
+    otherPerson: syncedOtherPerson,
   };
 };
 
@@ -1586,20 +1943,16 @@ export const bickerWithPartner = (
 
   const friendshipChange = -randomInt(1, 3);
   const romanceChange = -randomInt(1, 2);
+  const [nextPerson, nextOtherPerson] = updatePartnerRelationshipScores(
+    person,
+    otherPerson,
+    friendshipChange,
+    romanceChange
+  );
 
   return {
-    person: updatePartnerRelationshipScores(
-      person,
-      otherPerson,
-      friendshipChange,
-      romanceChange
-    ),
-    otherPerson: updatePartnerRelationshipScores(
-      otherPerson,
-      person,
-      friendshipChange,
-      romanceChange
-    ),
+    person: nextPerson,
+    otherPerson: nextOtherPerson,
     result: {
       friendshipChange,
       romanceChange,
@@ -1644,8 +1997,14 @@ export const breakUpOrDivorcePartner = (
   );
 
   return {
-    person: nextPerson,
-    otherPerson: nextOtherPerson,
+    person: {
+      ...nextPerson,
+      partner: null,
+    },
+    otherPerson: {
+      ...nextOtherPerson,
+      partner: null,
+    },
     action: endReason === "Divorce" ? "Divorce" : "Break Up",
   };
 };
@@ -1724,15 +2083,9 @@ export const haveConversationAbout = (
             ),
           }));
     const { friendshipChange, romanceChange } = rollConversationStatChanges(topic, true);
-    const scoredPerson = updatePartnerRelationshipScores(
+    const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
       boundaryUpdatedPerson,
       boundaryUpdatedOtherPerson,
-      friendshipChange,
-      romanceChange
-    );
-    const scoredOtherPerson = updatePartnerRelationshipScores(
-      boundaryUpdatedOtherPerson,
-      boundaryUpdatedPerson,
       friendshipChange,
       romanceChange
     );
@@ -1930,15 +2283,9 @@ export const haveConversationAbout = (
   }
 
   const { friendshipChange, romanceChange } = rollConversationStatChanges(topic, success);
-  const scoredPerson = updatePartnerRelationshipScores(
+  const [scoredPerson, scoredOtherPerson] = updatePartnerRelationshipScores(
     person,
     otherPerson,
-    friendshipChange,
-    romanceChange
-  );
-  const scoredOtherPerson = updatePartnerRelationshipScores(
-    otherPerson,
-    person,
     friendshipChange,
     romanceChange
   );

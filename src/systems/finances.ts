@@ -1,6 +1,11 @@
 import type { Character, Country } from "../types/character";
 import type { Household } from "../types/household";
 import { convertGBPToLocal, convertLocalToGBP } from "../utils/money";
+import {
+  getCharacterResidence,
+  getPropertyResidents,
+} from "./household";
+import { getCharacterPropertyEquityGBP, getPropertyEquityGBP } from "./propertyFinance";
 
 export const getTaxBrackets = (country: Country) => {
   if (country === "England") {
@@ -113,43 +118,50 @@ export const recalculateHouseholdFinance = (
   const currentCharacter =
     characters.find((character) => character.id === currentCharacterId) ??
     characters[0];
-  const residentCharacters = characters.filter((character) =>
-    household.house.residentIds.includes(character.id)
+  const financeHousehold = {
+    ...household,
+    characters,
+  };
+  const currentResidence = getCharacterResidence(financeHousehold, currentCharacter.id);
+  const residentCharacters = currentResidence
+    ? getPropertyResidents(financeHousehold, currentResidence.id)
+    : [currentCharacter];
+  const householdIncomeGBP = residentCharacters.reduce(
+    (sum, character) =>
+      sum +
+      character.annualIncomeGBP +
+      (character.partTimeJob?.annualSalaryGBP ?? 0),
+    0
   );
-  const householdIncomeGBP = characters
-    .filter((character) => household.house.residentIds.includes(character.id))
-    .reduce(
-      (sum, character) =>
-        sum +
-        character.annualIncomeGBP +
-        (character.partTimeJob?.annualSalaryGBP ?? 0),
-      0
-    );
-  const householdPlayerIncomeGBP = household.house.residentIds.includes(
-    currentCharacter.id
-  )
-    ? currentCharacter.annualIncomeGBP +
-      (currentCharacter.partTimeJob?.annualSalaryGBP ?? 0)
-    : 0;
+  const householdPlayerIncomeGBP =
+    currentCharacter.annualIncomeGBP +
+    (currentCharacter.partTimeJob?.annualSalaryGBP ?? 0);
   const householdOtherIncomeGBP = Math.max(
     0,
     householdIncomeGBP - householdPlayerIncomeGBP
   );
+  const totalPropertyValueGBP = household.properties.reduce(
+    (sum, property) => sum + getPropertyEquityGBP(property, household.propertyMortgages),
+    0
+  );
+  const totalBankBalanceGBP = characters.reduce(
+    (sum, character) => sum + character.bankBalanceGBP,
+    0
+  );
+  const householdPropertyNetWorthGBP =
+    totalBankBalanceGBP + totalPropertyValueGBP;
   const resolvedNetWorth =
     netWorthGBP ??
     Math.max(
       household.netWorthGBP,
-      household.house.valueGBP +
-        residentCharacters.reduce(
-          (sum, character) => sum + character.bankBalanceGBP,
-          0
-        )
+      householdPropertyNetWorthGBP
     );
-  const householdPlayerNetWorthGBP = household.house.residentIds.includes(
+  const householdPlayerPropertyWealthGBP = getCharacterPropertyEquityGBP(
+    financeHousehold,
     currentCharacter.id
-  )
-    ? currentCharacter.bankBalanceGBP
-    : 0;
+  );
+  const householdPlayerNetWorthGBP =
+    currentCharacter.bankBalanceGBP + householdPlayerPropertyWealthGBP;
   const householdOtherNetWorthGBP = Math.max(
     0,
     resolvedNetWorth - householdPlayerNetWorthGBP

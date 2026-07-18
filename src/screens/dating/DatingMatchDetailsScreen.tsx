@@ -1,5 +1,6 @@
 import React from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, SafeAreaView, ScrollView, View } from "react-native";
+import { AppText as Text } from "../../components/AppText";
 import {
   DatingBottomNavigation,
   type DatingDateCategoryRanges,
@@ -69,17 +70,17 @@ export function DatingMatchDetailsScreen({
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.appScreenHeader}>
           <Pressable onPress={onBack} style={styles.headerSideButton}>
-            <Text>{"<"}</Text>
+            <Text variant="buttonText">{"<"}</Text>
           </Pressable>
           <View style={styles.appScreenHeaderTitleWrap}>
-            <Text style={styles.screenTitle}>Dating App</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Dating App</Text>
           </View>
           <Pressable onPress={onToggleEngineerView} style={styles.headerSideButton}>
-            <Text>E</Text>
+            <Text variant="buttonText">E</Text>
           </Pressable>
         </View>
         <Pressable onPress={onHome} style={styles.box}>
-          <Text>Home</Text>
+          <Text variant="buttonText">Home</Text>
         </Pressable>
 
         {selectedDatingMatch ? (
@@ -90,68 +91,68 @@ export function DatingMatchDetailsScreen({
                   <View style={styles.smallProfileIconHead} />
                   <View style={styles.smallProfileIconBody} />
                 </View>
-                <View style={styles.detailGroup}>
-                  <Text>{`${selectedDatingMatch.firstName} ${selectedDatingMatch.lastName}`}</Text>
-                  <Text>{selectedDatingMatch.age}</Text>
-                  <Text>{selectedDatingMatch.job}</Text>
+              <View style={styles.detailGroup}>
+                  <Text variant="cardTitle">{`${selectedDatingMatch.firstName} ${selectedDatingMatch.lastName}`}</Text>
+                  <Text variant="value">{selectedDatingMatch.age}</Text>
+                  <Text variant="smallText">{selectedDatingMatch.job}</Text>
                 </View>
               </View>
             </View>
 
             <View style={styles.detailGroup}>
-              <Text>{`Friendship: ${selectedDatingMatch.friendshipScore}`}</Text>
-              <Text>{`Romance: ${selectedDatingMatch.romanceScore}`}</Text>
+              <Text><Text variant="label">Friendship: </Text><Text variant="value">{selectedDatingMatch.friendshipScore}</Text></Text>
+              <Text><Text variant="label">Romance: </Text><Text variant="value">{selectedDatingMatch.romanceScore}</Text></Text>
             </View>
 
             {matchDetailsEngineerViewVisible ? (
               <View style={styles.detailGroup}>
-                <Text>{`Intelligence: ${selectedDatingMatch.intelligence}`}</Text>
-                <Text>{`Chemistry: ${selectedDatingMatch.chemistry ?? "???"}`}</Text>
-                <Text>{`Attraction: ${selectedDatingMatch.attractiveness}`}</Text>
-                <Text>{`Match Chance: ${selectedDatingMatchChance}%`}</Text>
-                <Text>{`Rose Match Chance: ${selectedDatingMatchRoseChance}%`}</Text>
+                <Text><Text variant="label">Intelligence: </Text><Text variant="value">{selectedDatingMatch.intelligence}</Text></Text>
+                <Text><Text variant="label">Chemistry: </Text><Text variant="value">{selectedDatingMatch.chemistry ?? "???"}</Text></Text>
+                <Text><Text variant="label">Attraction: </Text><Text variant="value">{selectedDatingMatch.attractiveness}</Text></Text>
+                <Text><Text variant="label">Match Chance: </Text><Text variant="value">{`${selectedDatingMatchChance}%`}</Text></Text>
+                <Text><Text variant="label">Rose Match Chance: </Text><Text variant="value">{`${selectedDatingMatchRoseChance}%`}</Text></Text>
               </View>
             ) : null}
 
             <View style={styles.matchDetailsActionGrid}>
               <Pressable onPress={onText} style={styles.matchDetailsActionButton}>
-                <Text>Text</Text>
+                <Text variant="buttonText">Text</Text>
               </Pressable>
               <Pressable onPress={onToggleGoOnDate} style={styles.matchDetailsActionButton}>
-                <Text>Go on a Date</Text>
+                <Text variant="buttonText">Go on a Date</Text>
               </Pressable>
               <Pressable onPress={onSpendTheNight} style={styles.matchDetailsActionButton}>
-                <Text>Spend the Night</Text>
+                <Text variant="buttonText">Spend the Night</Text>
               </Pressable>
               <Pressable onPress={onGiveGift} style={styles.matchDetailsActionButton}>
-                <Text>Give Gift</Text>
+                <Text variant="buttonText">Give Gift</Text>
               </Pressable>
               <Pressable onPress={onStartRelationship} style={styles.matchDetailsActionButton}>
-                <Text>Start Relationship</Text>
+                <Text variant="buttonText">Start Relationship</Text>
               </Pressable>
               <Pressable onPress={onUnmatch} style={styles.matchDetailsActionButton}>
-                <Text>Unmatch</Text>
+                <Text variant="buttonText">Unmatch</Text>
               </Pressable>
             </View>
             {matchGoOnDateVisible ? (
               <View style={styles.detailBox}>
                 <Pressable onPress={() => onGoOnDate("free")} style={styles.innerBox}>
-                  <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
+                  <Text variant="buttonText">{`Free Date (${dateCategoryRanges.free})`}</Text>
                 </Pressable>
                 <Pressable onPress={() => onGoOnDate("cheap")} style={styles.innerBox}>
-                  <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
+                  <Text variant="buttonText">{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
                 </Pressable>
                 <Pressable onPress={() => onGoOnDate("fun")} style={styles.innerBox}>
-                  <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
+                  <Text variant="buttonText">{`Fun Date (${dateCategoryRanges.fun})`}</Text>
                 </Pressable>
                 <Pressable onPress={() => onGoOnDate("expensive")} style={styles.innerBox}>
-                  <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
+                  <Text variant="buttonText">{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
                 </Pressable>
               </View>
             ) : null}
           </>
         ) : (
-          <Text>No match selected.</Text>
+          <Text variant="smallText">No match selected.</Text>
         )}
         <DatingBottomNavigation
           styles={styles}

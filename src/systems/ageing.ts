@@ -20,6 +20,7 @@ import {
   shouldFriendGoToHigherEducation,
 } from "../systems/education";
 import { recalculateHouseholdFinance, getTaxSummary } from "../systems/finances";
+import { createPropertyMarket, processAnnualMortgagePayments } from "../systems/property";
 import {
   getPersonAge,
   syncLinkedSocialRecordsFromPeople,
@@ -325,29 +326,36 @@ export const ageHouseholdOneYear = (currentHousehold: Household): Household => {
     )
   );
 
+  const nextYear = currentHousehold.currentYear + 1;
+  const householdAfterMortgages = processAnnualMortgagePayments({
+    ...currentHousehold,
+    currentYear: nextYear,
+    characters: syncedCharacters,
+  });
+
   const nextNetWorthGBP = Math.max(
     0,
-    currentHousehold.netWorthGBP +
+    householdAfterMortgages.netWorthGBP +
       Math.round(
         recalculateHouseholdFinance(
-          currentHousehold,
-          syncedCharacters,
-          currentHousehold.currentCharacterId
+          householdAfterMortgages,
+          householdAfterMortgages.characters,
+          householdAfterMortgages.currentCharacterId
         ).householdIncomeGBP * 0.35
       ) +
       randomInt(-5000, 10000)
   );
   const finance = recalculateHouseholdFinance(
-    currentHousehold,
-    syncedCharacters,
-    currentHousehold.currentCharacterId,
+    householdAfterMortgages,
+    householdAfterMortgages.characters,
+    householdAfterMortgages.currentCharacterId,
     nextNetWorthGBP
   );
 
   return {
-    ...currentHousehold,
-    currentYear: currentHousehold.currentYear + 1,
-    characters: syncedCharacters,
+    ...householdAfterMortgages,
+    currentYear: nextYear,
+    propertyMarket: createPropertyMarket(nextYear),
     ...finance,
   };
 };

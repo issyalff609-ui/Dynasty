@@ -32,6 +32,7 @@ const {
   };
 })();
 const { startDating } = require("../.tmp-tests/src/systems/relationships.js");
+const { createPropertyMarket } = require("../.tmp-tests/src/systems/property.js");
 
 const CURRENT_YEAR = 2026;
 const APP_SOURCE_PATH = "/Users/isabellealff/Documents/Dynasties/App.tsx";
@@ -174,12 +175,23 @@ const buildHousehold = ({ bankBalanceGBP = 4200 } = {}) => {
     reputation: 62,
     tbcFlags: [],
     ideas: [],
-    house: {
-      bedrooms: 3,
-      bathrooms: 2,
-      valueGBP: 250000,
-      residentIds: [currentPlayer.id, currentPartner.id, sibling.id],
-    },
+    properties: [
+      {
+        id: "property-family-home",
+        bedrooms: 3,
+        bathrooms: 2,
+        valueGBP: 250000,
+        condition: "good",
+        neighbourhoodQuality: "average",
+        ownerIds: [],
+        ownershipShares: {},
+        residentIds: [currentPlayer.id, currentPartner.id, sibling.id],
+        propertyUse: "residence",
+        mortgageId: null,
+      },
+    ],
+    propertyMarket: createPropertyMarket(CURRENT_YEAR),
+    propertyMortgages: [],
     originalPlayerId: "player-1",
     currentCharacterId: "player-1",
     characters: [currentPlayer, currentPartner, sibling],

@@ -1,4 +1,4 @@
-import { getCurrentHouseholdCharacter } from "./household";
+import { getCharacterResidence, getCurrentHouseholdCharacter } from "./household";
 import {
   askPartnerForSpace,
   bickerWithPartner,
@@ -188,8 +188,8 @@ export const resolveCurrentPartnerContext = (
     currentCharacter,
     partnerCharacter,
     livesTogether:
-      household.house.residentIds.includes(currentCharacter.id) &&
-      household.house.residentIds.includes(partnerCharacter.id),
+      getCharacterResidence(household, currentCharacter.id)?.id ===
+      getCharacterResidence(household, partnerCharacter.id)?.id,
   };
 };
 

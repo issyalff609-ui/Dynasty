@@ -1,5 +1,6 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "../components/AppText";
 import { JOBS_WITH_DEGREE_REQUIREMENT, PART_TIME_HOURS_BANDS } from "../data/jobs";
 import { isDegreeEligibleForJob } from "../systems/careers";
 import type { Character, Country } from "../types/character";
@@ -66,39 +67,44 @@ export const CareerPanel = ({
       ) : (
         <>
           <View style={styles.jobsHeaderRow}>
-            <Text style={styles.testingText}>{`CV: ${currentCVScore}/100`}</Text>
+            <Text variant="smallText" style={styles.testingText}>{`CV: ${currentCVScore}/100`}</Text>
             <Pressable onPress={onToggleCvInfoVisible} style={styles.questionButton}>
-              <Text>?</Text>
+              <Text variant="buttonText">?</Text>
             </Pressable>
           </View>
           {cvInfoVisible ? (
-            <Text style={styles.testingText}>
+            <Text variant="smallText" style={styles.testingText}>
               Employers look at academic performance, reputation, education history, traits, and appearance.
             </Text>
           ) : null}
-          <Text style={styles.testingText}>{`Work Experience: ${currentCharacter.workExperienceYears} years`}</Text>
+          <Text variant="smallText" style={styles.testingText}>
+            {`Work Experience: ${currentCharacter.workExperienceYears} years`}
+          </Text>
           {currentCharacter.job !== "No job" ? (
             <Pressable style={styles.innerBox}>
-              <Text>{`Current Job: ${currentCharacter.job}`}</Text>
+              <Text><Text variant="label">Current Job: </Text><Text variant="value">{currentCharacter.job}</Text></Text>
             </Pressable>
           ) : null}
           {currentCharacter.job !== "No job" ? (
             <Pressable onPress={onQuitFullTimeJob} style={styles.innerBox}>
-              <Text>Quit Full Time Job</Text>
+              <Text variant="buttonText">Quit Full Time Job</Text>
             </Pressable>
           ) : null}
           <Pressable style={styles.innerBox}>
-            <Text>{`Current Part Time Job: ${
-              currentCharacter.partTimeJob?.title ?? "No job"
-            }`}</Text>
+            <Text>
+              <Text variant="label">Current Part Time Job: </Text>
+              <Text variant="value">
+                {currentCharacter.partTimeJob?.title ?? "No job"}
+              </Text>
+            </Text>
           </Pressable>
           {currentCharacter.partTimeJob ? (
             <Pressable onPress={onQuitPartTimeJob} style={styles.innerBox}>
-              <Text>Quit Part Time Job</Text>
+              <Text variant="buttonText">Quit Part Time Job</Text>
             </Pressable>
           ) : null}
           <Pressable onPress={onToggleLookForJobsVisible} style={styles.innerBox}>
-            <Text>Look For Jobs</Text>
+            <Text variant="buttonText">Look For Jobs</Text>
           </Pressable>
           {lookForJobsVisible ? (
             <View style={styles.detailBox}>
@@ -106,11 +112,14 @@ export const CareerPanel = ({
                 onPress={onToggleFullTimeJobsVisible}
                 style={styles.innerBox}
               >
-                <Text>Full Time Jobs</Text>
+                <Text variant="buttonText">Full Time Jobs</Text>
               </Pressable>
               {fullTimeJobsVisible ? (
                 <View style={styles.detailBox}>
-                  <Text>{`Refreshes Remaining: ${currentCharacter.jobRefreshesRemaining}/3`}</Text>
+                  <Text>
+                    <Text variant="label">Refreshes Remaining: </Text>
+                    <Text variant="value">{`${currentCharacter.jobRefreshesRemaining}/3`}</Text>
+                  </Text>
                   {currentCharacter.fullTimeJobListings.map((listing) => {
                     const degreeRequired = JOBS_WITH_DEGREE_REQUIREMENT.has(
                       listing.jobName
@@ -145,14 +154,14 @@ export const CareerPanel = ({
                             onPress={() => onApplyForFullTimeJob(listing)}
                             style={styles.innerBox}
                           >
-                            <Text>Apply</Text>
+                            <Text variant="buttonText">Apply</Text>
                           </Pressable>
                         ) : null}
                       </View>
                     );
                   })}
                   <Pressable onPress={onRefreshJobListings} style={styles.innerBox}>
-                    <Text>Refresh Jobs</Text>
+                    <Text variant="buttonText">Refresh Jobs</Text>
                   </Pressable>
                 </View>
               ) : null}
@@ -160,22 +169,25 @@ export const CareerPanel = ({
                 onPress={onTogglePartTimeJobsVisible}
                 style={styles.innerBox}
               >
-                <Text>Part Time Jobs</Text>
+                <Text variant="buttonText">Part Time Jobs</Text>
               </Pressable>
               {partTimeJobsVisible ? (
                 <View style={styles.detailBox}>
-                  <Text>Choose weekly hours first</Text>
+                  <Text variant="smallText">Choose weekly hours first</Text>
                   {PART_TIME_HOURS_BANDS.map((hoursBand) => (
                     <Pressable
                       key={hoursBand.label}
                       onPress={() => onChoosePartTimeHoursBand(hoursBand.label)}
                       style={styles.innerBox}
                     >
-                      <Text>{`${hoursBand.label} hrs a week`}</Text>
+                      <Text variant="buttonText">{`${hoursBand.label} hrs a week`}</Text>
                     </Pressable>
                   ))}
                   {selectedPartTimeHoursBand ? (
-                    <Text>{`Selected hours band: ${selectedPartTimeHoursBand} hrs a week`}</Text>
+                    <Text>
+                      <Text variant="label">Selected hours band: </Text>
+                      <Text variant="value">{`${selectedPartTimeHoursBand} hrs a week`}</Text>
+                    </Text>
                   ) : null}
                   {currentCharacter.partTimeJobListings.map((listing) => (
                     <View key={listing.id} style={styles.innerBox}>
@@ -190,7 +202,7 @@ export const CareerPanel = ({
                         onPress={() => onApplyForPartTimeJob(listing)}
                         style={styles.innerBox}
                       >
-                        <Text>Apply</Text>
+                        <Text variant="buttonText">Apply</Text>
                       </Pressable>
                     </View>
                   ))}
@@ -201,7 +213,7 @@ export const CareerPanel = ({
         </>
       )}
       <Pressable onPress={onClose} style={styles.innerBox}>
-        <Text>Close</Text>
+        <Text variant="buttonText">Close</Text>
       </Pressable>
     </View>
   );

@@ -9,16 +9,36 @@ import {
   syncPersonAge,
 } from "./person";
 import { normalizeDatingProfileCreated } from "./datingProfile";
-import { getCurrentHouseholdCharacter } from "./household";
-import { getActiveRomanticRelationship } from "./relationships";
+import {
+  DEFAULT_NEIGHBOURHOOD_QUALITY,
+  DEFAULT_PROPERTY_CONDITION,
+  getCurrentHouseholdCharacter,
+} from "./household";
+import {
+  createPropertyMarket,
+  getFamilyHomePropertyId,
+  normalizeCharacterLivingSituation,
+} from "./property";
+import {
+  getActiveRomanticRelationship,
+  repairRomanticPair,
+} from "./relationships";
 import type { Character, Country } from "../types/character";
-import type { Household } from "../types/household";
+import type {
+  Household,
+  NeighbourhoodQuality,
+  Property,
+  PropertyListing,
+  PropertyMarket,
+  PropertyMortgage,
+  PropertyCondition,
+} from "../types/household";
 import type { Classmate, DatingProfile, Friend } from "../types/relationships";
 import { randomInt } from "../utils/random";
 
 export const HOUSEHOLD_STORAGE_KEY = "dynasties-household";
 export const HOUSEHOLD_BACKUP_STORAGE_KEY = "dynasties-household-backup";
-export const CURRENT_SAVE_VERSION = 1;
+export const CURRENT_SAVE_VERSION = 3;
 export const HOUSEHOLD_SAVE_DEBOUNCE_MS = 250;
 export const MANUAL_SAVE_SLOT_KEYS = {
   slot_1: "dynasties-manual-life-slot-1",
@@ -122,6 +142,35 @@ type StoredHouseholdParseResult =
       error: string;
     };
 
+type LegacyHouse = {
+  bedrooms: number;
+  bathrooms: number;
+  valueGBP: number;
+  residentIds: string[];
+  condition?: PropertyCondition;
+  neighbourhoodQuality?: NeighbourhoodQuality;
+};
+
+const isLivingSituationLike = (value: unknown) => {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+
+  if (value.type === "homeless") {
+    return true;
+  }
+
+  if (value.type === "family_home" || value.type === "property") {
+    return typeof value.propertyId === "string";
+  }
+
+  return (
+    value.type === "staying_with_person" &&
+    typeof value.propertyId === "string" &&
+    typeof value.hostId === "string"
+  );
+};
+
 export type ManualLifeSaveSlotsResult =
   | {
       success: true;
@@ -201,6 +250,187 @@ const isStringArray = (value: unknown): value is string[] =>
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const isPropertyCondition = (value: unknown): value is PropertyCondition =>
+  value === "poor" ||
+  value === "needs_maintenance" ||
+  value === "good" ||
+  value === "outstanding";
+
+const isNeighbourhoodQuality = (value: unknown): value is NeighbourhoodQuality =>
+  value === "poor" ||
+  value === "average" ||
+  value === "good" ||
+  value === "excellent";
+
+const isPropertyLike = (value: unknown): value is Property => {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "string") return false;
+  if (!isFiniteNumber(value.bedrooms)) return false;
+  if (!isFiniteNumber(value.bathrooms)) return false;
+  if (!isFiniteNumber(value.valueGBP)) return false;
+  if (!isStringArray(value.ownerIds)) return false;
+  if (!isRecord(value.ownershipShares)) return false;
+  if (!isStringArray(value.residentIds)) return false;
+  if (!isPropertyCondition(value.condition)) return false;
+  if (!isNeighbourhoodQuality(value.neighbourhoodQuality)) return false;
+  if (value.propertyUse !== "residence" && value.propertyUse !== "rental") return false;
+  if (value.mortgageId !== null && typeof value.mortgageId !== "string") return false;
+
+  return Object.values(value.ownershipShares).every((share) => isFiniteNumber(share));
+};
+
+const isPropertyListingLike = (value: unknown): value is PropertyListing =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  (value.realtorTier === "normal" || value.realtorTier === "luxury") &&
+  isFiniteNumber(value.valueGBP) &&
+  isFiniteNumber(value.bedrooms) &&
+  isFiniteNumber(value.bathrooms) &&
+  isPropertyCondition(value.condition) &&
+  isFiniteNumber(value.neighbourhoodQuality);
+
+const isPropertyMarketLike = (value: unknown): value is PropertyMarket =>
+  isRecord(value) &&
+  isFiniteNumber(value.year) &&
+  Array.isArray(value.listings) &&
+  value.listings.every(isPropertyListingLike);
+
+const isPropertyMortgageLike = (value: unknown): value is PropertyMortgage =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.propertyId === "string" &&
+  isStringArray(value.borrowerIds) &&
+  isFiniteNumber(value.originalPrincipalGBP) &&
+  isFiniteNumber(value.outstandingPrincipalGBP) &&
+  isFiniteNumber(value.annualInterestRate) &&
+  isFiniteNumber(value.termYears) &&
+  isFiniteNumber(value.yearsRemaining) &&
+  isFiniteNumber(value.annualRepaymentGBP) &&
+  isRecord(value.borrowerShares) &&
+  Object.values(value.borrowerShares).every((share) => isFiniteNumber(share));
+
+const isLegacyHouseLike = (value: unknown): value is LegacyHouse => {
+  if (!isRecord(value)) return false;
+  if (!isFiniteNumber(value.bedrooms)) return false;
+  if (!isFiniteNumber(value.bathrooms)) return false;
+  if (!isFiniteNumber(value.valueGBP)) return false;
+  if (!isStringArray(value.residentIds)) return false;
+  if (
+    "condition" in value &&
+    value.condition !== undefined &&
+    !isPropertyCondition(value.condition)
+  ) {
+    return false;
+  }
+  if (
+    "neighbourhoodQuality" in value &&
+    value.neighbourhoodQuality !== undefined &&
+    !isNeighbourhoodQuality(value.neighbourhoodQuality)
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const buildOwnershipShares = (ownerIds: string[]) => {
+  if (ownerIds.length === 0) {
+    return {};
+  }
+
+  const baseShare = Math.floor(100 / ownerIds.length);
+  const remainder = 100 - baseShare * ownerIds.length;
+
+  return Object.fromEntries(
+    ownerIds.map((ownerId, index) => [ownerId, baseShare + (index < remainder ? 1 : 0)])
+  );
+};
+
+const getLegacyPropertyOwners = (
+  originalPlayerId: string,
+  characters: Character[]
+): string[] => {
+  const originalPlayer =
+    characters.find((character) => character.id === originalPlayerId) ?? characters[0] ?? null;
+
+  if (!originalPlayer) {
+    return [];
+  }
+
+  return [originalPlayer.motherId, originalPlayer.fatherId].filter(
+    (characterId, index, values): characterId is string =>
+      typeof characterId === "string" &&
+      values.indexOf(characterId) === index &&
+      characters.some((character) => character.id === characterId)
+  );
+};
+
+const migrateLegacyHouseToProperty = ({
+  house,
+  originalPlayerId,
+  characters,
+}: {
+  house: LegacyHouse;
+  originalPlayerId: string;
+  characters: Character[];
+}): Property => {
+  const ownerIds = getLegacyPropertyOwners(originalPlayerId, characters);
+
+  return {
+    id: "property-family-home",
+    bedrooms: house.bedrooms,
+    bathrooms: house.bathrooms,
+    valueGBP: house.valueGBP,
+    condition: isPropertyCondition(house.condition)
+      ? house.condition
+      : DEFAULT_PROPERTY_CONDITION,
+    neighbourhoodQuality: isNeighbourhoodQuality(house.neighbourhoodQuality)
+      ? house.neighbourhoodQuality
+      : DEFAULT_NEIGHBOURHOOD_QUALITY,
+    ownerIds,
+    ownershipShares: buildOwnershipShares(ownerIds),
+    residentIds: Array.isArray(house.residentIds) ? house.residentIds : [],
+    propertyUse: "residence",
+    mortgageId: null,
+  };
+};
+
+const normalizeProperty = (property: Property): Property => {
+  const ownerIds = Array.isArray(property.ownerIds) ? property.ownerIds : [];
+  const ownershipShares = Object.fromEntries(
+    ownerIds.map((ownerId) => [
+      ownerId,
+      isFiniteNumber(property.ownershipShares[ownerId]) ? property.ownershipShares[ownerId] : 0,
+    ])
+  );
+  const shareTotal = Object.values(ownershipShares).reduce((sum, share) => sum + share, 0);
+  const normalizedOwnershipShares =
+    ownerIds.length > 0 && shareTotal !== 100 ? buildOwnershipShares(ownerIds) : ownershipShares;
+  const residentIds = Array.isArray(property.residentIds) ? property.residentIds : [];
+  const condition = isPropertyCondition(property.condition)
+    ? property.condition
+    : DEFAULT_PROPERTY_CONDITION;
+  const neighbourhoodQuality = isNeighbourhoodQuality(property.neighbourhoodQuality)
+    ? property.neighbourhoodQuality
+    : DEFAULT_NEIGHBOURHOOD_QUALITY;
+  const propertyUse =
+    property.propertyUse === "residence" || property.propertyUse === "rental"
+      ? property.propertyUse
+      : "residence";
+  const mortgageId = property.mortgageId ?? null;
+
+  return {
+    ...property,
+    ownerIds,
+    ownershipShares: normalizedOwnershipShares,
+    residentIds,
+    condition,
+    neighbourhoodQuality,
+    propertyUse,
+    mortgageId,
+  };
+};
 
 const isManualSaveSlotId = (value: unknown): value is ManualSaveSlotId =>
   value === "slot_1" || value === "slot_2";
@@ -443,6 +673,13 @@ const hydrateCharacter = (
   const relationshipScores = isRecord(character.relationshipScores)
     ? character.relationshipScores
     : {};
+  const livingSituation = isLivingSituationLike(character.livingSituation)
+    ? character.livingSituation
+    : { type: "homeless" as const };
+  const familyHomePropertyId =
+    typeof character.familyHomePropertyId === "string"
+      ? character.familyHomePropertyId
+      : null;
   const memories = Array.isArray(character.memories) ? character.memories : [];
   const proposalHistory = Array.isArray(character.proposalHistory)
     ? character.proposalHistory
@@ -527,6 +764,8 @@ const hydrateCharacter = (
       datingRoseState,
       datingRefreshesRemaining,
       relationshipScores,
+      livingSituation,
+      familyHomePropertyId,
       memories,
       proposalHistory,
       diary,
@@ -571,6 +810,8 @@ const hydrateCharacter = (
     character.datingRoseState === datingRoseState &&
     character.datingRefreshesRemaining === datingRefreshesRemaining &&
     character.relationshipScores === relationshipScores &&
+    character.livingSituation === livingSituation &&
+    character.familyHomePropertyId === familyHomePropertyId &&
     character.memories === memories &&
     character.proposalHistory === proposalHistory &&
     character.diary === diary &&
@@ -607,6 +848,8 @@ const hydrateCharacter = (
     datingRoseState,
     datingRefreshesRemaining,
     relationshipScores,
+    livingSituation,
+    familyHomePropertyId,
     memories,
     proposalHistory,
     diary,
@@ -663,30 +906,66 @@ const isHouseholdLike = (value: unknown): value is Household => {
   if (!value.characters.some((character) => character.id === value.originalPlayerId)) {
     return false;
   }
-  if (!isRecord(value.house)) return false;
-  if (!isFiniteNumber(value.house.bedrooms)) return false;
-  if (!isFiniteNumber(value.house.bathrooms)) return false;
-  if (!isFiniteNumber(value.house.valueGBP)) return false;
-  if (!isStringArray(value.house.residentIds)) return false;
 
-  return true;
+  if (Array.isArray(value.properties)) {
+    const propertyMarketValid =
+      !("propertyMarket" in value) || isPropertyMarketLike(value.propertyMarket);
+    const propertyMortgagesValid =
+      !("propertyMortgages" in value) ||
+      (Array.isArray(value.propertyMortgages) &&
+        value.propertyMortgages.every(isPropertyMortgageLike));
+
+    return value.properties.every(isPropertyLike) && propertyMarketValid && propertyMortgagesValid;
+  }
+
+  return isLegacyHouseLike((value as Record<string, unknown>).house);
 };
 
 const normalizeHousehold = (household: Household): Household => {
   const tbcFlags = Array.isArray(household.tbcFlags) ? household.tbcFlags : [];
   const ideas = Array.isArray(household.ideas) ? household.ideas : [];
-  const residentIds = Array.isArray(household.house.residentIds)
-    ? household.house.residentIds
+  const propertiesSource = Array.isArray(household.properties)
+    ? household.properties
+    : isLegacyHouseLike((household as unknown as Record<string, unknown>).house)
+      ? [
+          migrateLegacyHouseToProperty({
+            house: (household as unknown as { house: LegacyHouse }).house,
+            originalPlayerId: household.originalPlayerId,
+            characters: household.characters,
+          }),
+        ]
+      : [];
+  const properties = propertiesSource.map(normalizeProperty);
+  const propertiesChanged =
+    !Array.isArray(household.properties) ||
+    properties.length !== household.properties.length ||
+    properties.some((property, index) => property !== household.properties[index]);
+  const propertyMarket = isPropertyMarketLike(household.propertyMarket)
+    ? household.propertyMarket.year === household.currentYear
+      ? household.propertyMarket
+      : createPropertyMarket(household.currentYear)
+    : createPropertyMarket(household.currentYear);
+  const propertyMortgages = Array.isArray(household.propertyMortgages)
+    ? household.propertyMortgages
+        .filter(isPropertyMortgageLike)
+        .map((mortgage) => ({
+          ...mortgage,
+          borrowerIds: Array.isArray(mortgage.borrowerIds) ? mortgage.borrowerIds : [],
+          borrowerShares: isRecord(mortgage.borrowerShares) ? mortgage.borrowerShares : {},
+        }))
     : [];
-  const house = {
-    ...household.house,
-    residentIds,
-  };
+  const propertyMarketChanged = propertyMarket !== household.propertyMarket;
+  const propertyMortgagesChanged =
+    !Array.isArray(household.propertyMortgages) ||
+    propertyMortgages.length !== household.propertyMortgages.length ||
+    propertyMortgages.some((mortgage, index) => mortgage !== household.propertyMortgages[index]);
 
   if (
+    !propertiesChanged &&
+    !propertyMarketChanged &&
+    !propertyMortgagesChanged &&
     tbcFlags === household.tbcFlags &&
-    ideas === household.ideas &&
-    residentIds === household.house.residentIds
+    ideas === household.ideas
   ) {
     return household;
   }
@@ -695,14 +974,71 @@ const normalizeHousehold = (household: Household): Household => {
     ...household,
     tbcFlags,
     ideas,
-    house,
+    properties,
+    propertyMarket,
+    propertyMortgages,
   };
+};
+
+const repairHouseholdRomanticRelationships = (household: Household): Household => {
+  let characters = household.characters;
+  let changed = false;
+  const processedPairIds = new Set<string>();
+
+  for (const character of characters) {
+    const activeRelationship = getActiveRomanticRelationship(character);
+    if (!activeRelationship) {
+      if (character.partner !== null) {
+        characters = characters.map((item) =>
+          item.id === character.id ? { ...item, partner: null } : item
+        );
+        changed = true;
+      }
+      continue;
+    }
+
+    const otherPerson =
+      characters.find((item) => item.id === activeRelationship.personId) ?? null;
+    if (!otherPerson) {
+      continue;
+    }
+
+    const pairKey = [character.id, otherPerson.id].sort().join(":");
+    if (processedPairIds.has(pairKey)) {
+      continue;
+    }
+    processedPairIds.add(pairKey);
+
+    const repairedPair = repairRomanticPair(character, otherPerson);
+    if (!repairedPair) {
+      continue;
+    }
+
+    const [repairedCharacter, repairedOtherPerson] = repairedPair;
+    characters = characters.map((item) =>
+      item.id === repairedCharacter.id
+        ? repairedCharacter
+        : item.id === repairedOtherPerson.id
+          ? repairedOtherPerson
+          : item
+    );
+    if (repairedCharacter !== character || repairedOtherPerson !== otherPerson) {
+      changed = true;
+    }
+  }
+
+  return changed
+    ? {
+        ...household,
+        characters,
+      }
+    : household;
 };
 
 export const hydrateHousehold = (household: Household): Household => {
   const normalizedHousehold = normalizeHousehold(household);
   let changed = normalizedHousehold !== household;
-  const characters = normalizedHousehold.characters.map((character) => {
+  const hydratedCharacters = normalizedHousehold.characters.map((character) => {
     const hydrated = hydrateCharacter(
       character,
       normalizedHousehold.currentYear,
@@ -714,15 +1050,46 @@ export const hydrateHousehold = (household: Household): Household => {
     }
     return hydrated;
   });
+  const householdWithHydratedCharacters =
+    hydratedCharacters === normalizedHousehold.characters
+      ? normalizedHousehold
+      : {
+          ...normalizedHousehold,
+          characters: hydratedCharacters,
+        };
+  const characters = householdWithHydratedCharacters.characters.map((character) => {
+    const familyHomePropertyId = getFamilyHomePropertyId(
+      householdWithHydratedCharacters,
+      character.id
+    );
+    const livingSituation = normalizeCharacterLivingSituation(
+      householdWithHydratedCharacters,
+      character
+    );
+
+    if (
+      character.familyHomePropertyId === familyHomePropertyId &&
+      character.livingSituation === livingSituation
+    ) {
+      return character;
+    }
+
+    changed = true;
+    return {
+      ...character,
+      familyHomePropertyId,
+      livingSituation,
+    };
+  });
 
   if (!changed) {
-    return normalizedHousehold;
+    return repairHouseholdRomanticRelationships(householdWithHydratedCharacters);
   }
 
-  return {
-    ...normalizedHousehold,
+  return repairHouseholdRomanticRelationships({
+    ...householdWithHydratedCharacters,
     characters,
-  };
+  });
 };
 
 const isGameSave = (value: unknown): value is GameSave =>
@@ -800,7 +1167,7 @@ const parseStoredHousehold = (
         success: true,
         household: parsed.household,
         savedAt: parsed.savedAt,
-        shouldResave: false,
+        shouldResave: parsed.saveVersion !== CURRENT_SAVE_VERSION,
         usedLegacyFormat: false,
       };
     }

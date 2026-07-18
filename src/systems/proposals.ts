@@ -485,8 +485,8 @@ export const resolveProposalToPartner = ({
       currentYear
     );
     const updatedPartnerProfile = buildMirroredPartnerProfile(
-      engagedOtherPerson,
-      engagedPerson
+      engagedPerson,
+      engagedOtherPerson
     );
     const withRecord = appendProposalRecord(
       appendProposalMemory(engagedPerson, proposalMemory),

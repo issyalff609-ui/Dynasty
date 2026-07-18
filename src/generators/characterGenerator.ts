@@ -164,6 +164,10 @@ export const createCharacter = (
     classmates: [],
     friends: [],
     relationshipScores: {},
+    livingSituation: {
+      type: "homeless",
+    },
+    familyHomePropertyId: null,
     memories: [],
     proposalHistory: [],
     diary: [],

@@ -10,6 +10,22 @@ const { createCharacter } = require("../.tmp-tests/src/generators/characterGener
 
 const CURRENT_YEAR = 2026;
 
+const withMockedRandom = (values, run) => {
+  const originalRandom = Math.random;
+  let index = 0;
+  Math.random = () => {
+    const value = values[Math.min(index, values.length - 1)];
+    index += 1;
+    return value;
+  };
+
+  try {
+    return run();
+  } finally {
+    Math.random = originalRandom;
+  }
+};
+
 const buildCharacter = () =>
   createCharacter(
     "Brother",
@@ -131,6 +147,89 @@ test("texting can produce no romance increase", () => {
   assert.equal(sawNoRomanceIncrease, true);
 });
 
+test("accepted text interactions apply the existing friendship change instead of always returning zero", () => {
+  const character = {
+    ...buildCharacter(),
+    datingMatches: [buildMatch({ friendshipScore: 20, romanceScore: 20, chemistry: 80 })],
+  };
+  const expected = withMockedRandom([0.1, 0.4, 0.4, 0.4, 0.1], () =>
+    applyDatingInteraction(character, character.datingMatches[0], "text", true)
+  );
+  const result = withMockedRandom([0.01, 0.1, 0.4, 0.4, 0.4, 0.1], () =>
+    resolveDatingMatchTextInteraction({
+      character,
+      matchId: "match-1",
+    })
+  );
+
+  assert.ok(result);
+  if (!result) {
+    return;
+  }
+
+  assert.equal(result.accepted, true);
+  assert.notEqual(result.friendshipChange, 0);
+  assert.equal(result.friendshipChange, expected.friendshipChange);
+  assert.equal(result.romanceChange, expected.romanceChange);
+  assert.equal(result.message, expected.message);
+  assert.equal(result.character.datingMatches[0].friendshipScore, expected.match.friendshipScore);
+  assert.equal(result.character.datingMatches[0].romanceScore, expected.match.romanceScore);
+});
+
+test("accepted text interactions apply the existing romance change where intended", () => {
+  const character = {
+    ...buildCharacter(),
+    datingMatches: [buildMatch({ friendshipScore: 35, romanceScore: 40, chemistry: 90 })],
+  };
+  const expected = withMockedRandom([0.2, 0.3, 0.4, 0.4, 0.7, 0.5], () =>
+    applyDatingInteraction(character, character.datingMatches[0], "text", true)
+  );
+  const result = withMockedRandom([0.02, 0.2, 0.3, 0.4, 0.4, 0.7, 0.5], () =>
+    resolveDatingMatchTextInteraction({
+      character,
+      matchId: "match-1",
+    })
+  );
+
+  assert.ok(result);
+  if (!result) {
+    return;
+  }
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.friendshipChange, expected.friendshipChange);
+  assert.equal(result.romanceChange, expected.romanceChange);
+  assert.ok(result.romanceChange > 0);
+  assert.equal(result.message, expected.message);
+});
+
+test("rejected text interactions keep the existing negative result and message", () => {
+  const character = {
+    ...buildCharacter(),
+    datingMatches: [buildMatch({ friendshipScore: 28, romanceScore: 22, chemistry: 55 })],
+  };
+  const expected = withMockedRandom([0.2, 0.4, 0.5, 0.6], () =>
+    applyDatingInteraction(character, character.datingMatches[0], "text", false)
+  );
+  const result = withMockedRandom([0.99, 0.2, 0.4, 0.5, 0.6], () =>
+    resolveDatingMatchTextInteraction({
+      character,
+      matchId: "match-1",
+    })
+  );
+
+  assert.ok(result);
+  if (!result) {
+    return;
+  }
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.friendshipChange, expected.friendshipChange);
+  assert.equal(result.romanceChange, expected.romanceChange);
+  assert.ok(result.friendshipChange < 0);
+  assert.equal(result.message, expected.message);
+});
+
 test("successful texting can add between 5 and 15 romance and returns actual changes", () => {
   let result = null;
   for (let index = 0; index < 200; index += 1) {
@@ -183,4 +282,82 @@ test("existing dating matches are not reset by texting changes", () => {
 
   assert.equal(result.character.datingMatches.length, 2);
   assert.ok(result.character.datingMatches.some((match) => match.id === "match-2"));
+});
+
+test("text interaction replaces only the correct match and leaves others unchanged", () => {
+  const firstMatch = buildMatch({ id: "match-1", friendshipScore: 20, romanceScore: 20 });
+  const secondMatch = buildMatch({
+    id: "match-2",
+    firstName: "Morgan",
+    friendshipScore: 44,
+    romanceScore: 31,
+    interacted: false,
+  });
+  const character = {
+    ...buildCharacter(),
+    datingMatches: [firstMatch, secondMatch],
+  };
+
+  const result = withMockedRandom([0.01, 0.1, 0.4, 0.4, 0.4, 0.1], () =>
+    resolveDatingMatchTextInteraction({
+      character,
+      matchId: "match-1",
+    })
+  );
+
+  assert.ok(result);
+  if (!result) {
+    return;
+  }
+
+  const updatedFirstMatch = result.character.datingMatches.find((match) => match.id === "match-1");
+  const unchangedSecondMatch = result.character.datingMatches.find((match) => match.id === "match-2");
+
+  assert.ok(updatedFirstMatch);
+  assert.ok(unchangedSecondMatch);
+  assert.notDeepEqual(updatedFirstMatch, firstMatch);
+  assert.deepEqual(unchangedSecondMatch, secondMatch);
+});
+
+test("repeated text interactions accumulate the shared helper's score changes", () => {
+  const initialCharacter = {
+    ...buildCharacter(),
+    datingMatches: [buildMatch({ friendshipScore: 10, romanceScore: 10, chemistry: 85 })],
+  };
+
+  const first = withMockedRandom([0.01, 0.1, 0.4, 0.4, 0.4, 0.1], () =>
+    resolveDatingMatchTextInteraction({
+      character: initialCharacter,
+      matchId: "match-1",
+    })
+  );
+  assert.ok(first);
+  if (!first) {
+    return;
+  }
+
+  const second = withMockedRandom([0.01, 0.1, 0.4, 0.4, 0.4, 0.1], () =>
+    resolveDatingMatchTextInteraction({
+      character: first.character,
+      matchId: "match-1",
+    })
+  );
+  assert.ok(second);
+  if (!second) {
+    return;
+  }
+
+  const firstMatch = first.character.datingMatches.find((match) => match.id === "match-1");
+  const secondMatch = second.character.datingMatches.find((match) => match.id === "match-1");
+
+  assert.ok(firstMatch);
+  assert.ok(secondMatch);
+  assert.equal(
+    secondMatch.friendshipScore - initialCharacter.datingMatches[0].friendshipScore,
+    first.friendshipChange + second.friendshipChange
+  );
+  assert.equal(
+    secondMatch.romanceScore - initialCharacter.datingMatches[0].romanceScore,
+    first.romanceChange + second.romanceChange
+  );
 });

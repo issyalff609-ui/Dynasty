@@ -1,5 +1,6 @@
 import React from "react";
-import { Pressable, StyleSheet, Text } from "react-native";
+import { Pressable, StyleSheet } from "react-native";
+import { AppText as Text } from "./AppText";
 
 type CharacterHeaderProps = {
   headerLabel: string;
@@ -16,10 +17,10 @@ export const CharacterHeader = ({
 }: CharacterHeaderProps) => (
   <>
     <Pressable onPress={onPress} style={styles.box}>
-      <Text>{headerLabel}</Text>
+      <Text variant="buttonText">{headerLabel}</Text>
     </Pressable>
-    <Text>{sectionLabel}</Text>
-    <Text>{summary}</Text>
+    <Text variant="sectionTitle" weight="semiBold">{sectionLabel}</Text>
+    <Text variant="smallText" weight="medium">{summary}</Text>
   </>
 );
 

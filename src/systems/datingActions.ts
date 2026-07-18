@@ -16,6 +16,7 @@ import {
   buildMirroredPartnerProfile,
   endRelationship,
   getActiveRomanticRelationship,
+  syncPartnerViewsForPair,
   startDating,
 } from "./relationships";
 import type { Character } from "../types/character";
@@ -200,17 +201,12 @@ export const resolveDatingMatchTextInteraction = ({
     "text"
   );
   const accepted = Math.random() < interactionChance;
-
-  let interactionResult = null as ReturnType<typeof applyDatingInteraction> | null;
-
-  const resolvedInteractionResult =
-    interactionResult ?? {
-      accepted,
-      friendshipChange: 0,
-      romanceChange: 0,
-      message: accepted ? "The conversation went well." : "The conversation felt flat.",
-      match,
-    };
+  const resolvedInteractionResult = applyDatingInteraction(
+    character,
+    match,
+    "text",
+    accepted
+  );
 
   return {
     character: {
@@ -370,23 +366,50 @@ export const resolveStartRelationshipWithMatch = ({
   const [datedCurrentCharacter, datedPartner] = startDating(
     relationshipCurrentCharacter,
     relationshipPartner,
-    household.currentYear
+    household.currentYear,
+    {
+      friendshipScore: match.friendshipScore,
+      romanceScore: match.romanceScore,
+    }
   );
-  const updatedCurrentCharacter: Character = {
+  const transferredPartnerProfile: DatingProfile = {
+    ...promotedMatch,
+    friendshipScore: match.friendshipScore,
+    romanceScore: match.romanceScore,
+  };
+  const seededCurrentCharacter: Character = {
     ...datedCurrentCharacter,
-    partner: promotedMatch,
-    datingMatches: datedCurrentCharacter.datingMatches.filter((item) => item.id !== matchId),
+    partner: transferredPartnerProfile,
   };
   const mirroredPartnerProfile = buildMirroredPartnerProfile(
     datedPartner,
-    updatedCurrentCharacter
+    seededCurrentCharacter
   );
-  const updatedPartner = mirroredPartnerProfile
-    ? {
-        ...datedPartner,
-        partner: mirroredPartnerProfile,
-      }
-    : datedPartner;
+  if (!mirroredPartnerProfile) {
+    return {
+      status: "invalid_relationship_state",
+      household,
+    };
+  }
+  const seededPartner: Character = {
+    ...datedPartner,
+    partner: mirroredPartnerProfile,
+  };
+  const [syncedCurrentCharacter, syncedPartner] = syncPartnerViewsForPair(
+    seededCurrentCharacter,
+    seededPartner
+  );
+  if (!syncedCurrentCharacter.partner || !syncedPartner.partner) {
+    return {
+      status: "invalid_relationship_state",
+      household,
+    };
+  }
+  const updatedCurrentCharacter: Character = {
+    ...syncedCurrentCharacter,
+    datingMatches: syncedCurrentCharacter.datingMatches.filter((item) => item.id !== matchId),
+  };
+  const updatedPartner = syncedPartner;
 
   return {
     status: "accepted",

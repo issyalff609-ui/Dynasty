@@ -1,8 +1,9 @@
 import React from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, SafeAreaView, ScrollView, View } from "react-native";
 import type { DatingAgeFilter } from "../../data/dating";
 import type { Preference } from "../../types/person";
 import { DatingBottomNavigation, type DatingScreenStyles } from "./shared";
+import { AppText as Text } from "../../components/AppText";
 
 type DatingPreferencesScreenProps = {
   styles: DatingScreenStyles;
@@ -52,65 +53,66 @@ export function DatingPreferencesScreen({
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.appScreenHeader}>
           <Pressable onPress={onBack} style={styles.headerSideButton}>
-            <Text>{"<"}</Text>
+            <Text variant="buttonText">{"<"}</Text>
           </Pressable>
           <View style={styles.appScreenHeaderTitleWrap}>
-            <Text style={styles.screenTitle}>Dating App</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Dating App</Text>
           </View>
           <Pressable onPress={onClose} style={styles.headerSideButton}>
-            <Text>X</Text>
+            <Text variant="buttonText">X</Text>
           </Pressable>
         </View>
         <Pressable onPress={onHome} style={styles.box}>
-          <Text>Home</Text>
+          <Text variant="buttonText">Home</Text>
         </Pressable>
 
         {isSetupFlow ? (
           <View style={styles.progressRow}>
-            <Text>Profile</Text>
+            <Text variant="smallText">Profile</Text>
             <View style={styles.progressLine} />
-            <Text style={styles.progressStepActive}>Preferences</Text>
+            <Text variant="label" style={styles.progressStepActive}>Preferences</Text>
             <View style={styles.progressLine} />
-            <Text>Discover</Text>
+            <Text variant="smallText">Discover</Text>
           </View>
         ) : null}
 
-        <Text style={styles.sectionTitle}>Preferences</Text>
+        <Text variant="sectionTitle" style={styles.sectionTitle}>Preferences</Text>
         <Text>{introText}</Text>
 
         <View style={styles.detailGroup}>
-          <Text style={styles.fieldSectionTitle}>Age Range</Text>
+          <Text variant="cardTitle" style={styles.fieldSectionTitle}>Age Range</Text>
           <View style={styles.ageSelectorsHeaderRow}>
-            <Text>Minimum Age</Text>
-            <Text>Maximum Age</Text>
+            <Text variant="label">Minimum Age</Text>
+            <Text variant="label">Maximum Age</Text>
           </View>
           <View style={styles.ageSelectorsRow}>
             <View style={styles.ageSelector}>
               <Pressable onPress={onDecreaseMinimumAge} style={styles.ageAdjustButton}>
-                <Text>-</Text>
+                <Text variant="buttonText">-</Text>
               </Pressable>
-              <Text>{resolvedDatingAgeFilter.minimumAge}</Text>
+              <Text variant="value">{resolvedDatingAgeFilter.minimumAge}</Text>
               <Pressable onPress={onIncreaseMinimumAge} style={styles.ageAdjustButton}>
-                <Text>+</Text>
+                <Text variant="buttonText">+</Text>
               </Pressable>
             </View>
             <View style={styles.ageSelector}>
               <Pressable onPress={onDecreaseMaximumAge} style={styles.ageAdjustButton}>
-                <Text>-</Text>
+                <Text variant="buttonText">-</Text>
               </Pressable>
-              <Text>{maximumAgeLabel}</Text>
+              <Text variant="value">{maximumAgeLabel}</Text>
               <Pressable onPress={onIncreaseMaximumAge} style={styles.ageAdjustButton}>
-                <Text>+</Text>
+                <Text variant="buttonText">+</Text>
               </Pressable>
             </View>
           </View>
         </View>
 
         <View style={styles.detailGroup}>
-          <Text style={styles.fieldSectionTitle}>Gender</Text>
+          <Text variant="cardTitle" style={styles.fieldSectionTitle}>Gender</Text>
           <View style={styles.genderOptionRow}>
             <Pressable onPress={() => onSelectGender("Female")} style={styles.genderOption}>
               <Text
+                variant={resolvedDatingGenderFilter === "Female" ? "buttonText" : "bodyText"}
                 style={
                   resolvedDatingGenderFilter === "Female"
                     ? styles.progressStepActive
@@ -122,6 +124,7 @@ export function DatingPreferencesScreen({
             </Pressable>
             <Pressable onPress={() => onSelectGender("Male")} style={styles.genderOption}>
               <Text
+                variant={resolvedDatingGenderFilter === "Male" ? "buttonText" : "bodyText"}
                 style={
                   resolvedDatingGenderFilter === "Male"
                     ? styles.progressStepActive
@@ -133,6 +136,7 @@ export function DatingPreferencesScreen({
             </Pressable>
             <Pressable onPress={() => onSelectGender("Both")} style={styles.genderOption}>
               <Text
+                variant={resolvedDatingGenderFilter === "Both" ? "buttonText" : "bodyText"}
                 style={
                   resolvedDatingGenderFilter === "Both"
                     ? styles.progressStepActive
@@ -146,7 +150,9 @@ export function DatingPreferencesScreen({
         </View>
 
         <Pressable onPress={onConfirm} style={styles.box}>
-          <Text>{isSetupFlow ? "Create Profile" : "Save Preferences"}</Text>
+          <Text variant="buttonText">
+            {isSetupFlow ? "Create Profile" : "Save Preferences"}
+          </Text>
         </Pressable>
         {!isSetupFlow ? (
           <DatingBottomNavigation

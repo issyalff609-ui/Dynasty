@@ -222,6 +222,35 @@ test("proposal compatibility uses the partner-facing direction", () => {
   assert.equal(result.result.outcome, "dumped");
 });
 
+test("accepted proposals keep the proposer's partner pointed at the engaged partner", () => {
+  const [person, otherPerson] = buildDatingPartners({
+    friendshipScore: 80,
+    romanceScore: 90,
+  });
+
+  const result = resolveProposalToPartner({
+    person,
+    otherPerson,
+    currentYear: CURRENT_YEAR,
+    plan: buildPlan(),
+    randomModifier: 0,
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.result.outcome, "yes");
+  assert.equal(result.person.partner?.personId, result.otherPerson.id);
+
+  const activeRelationship =
+    getActiveRomanticRelationshipBetween(result.person, result.otherPerson.id) ??
+    getActiveRomanticRelationshipBetween(result.otherPerson, result.person.id);
+  assert.ok(activeRelationship);
+  assert.equal(activeRelationship.currentStatus, "Engaged");
+});
+
 test("proposal preference modifier is capped at +10", () => {
   const modifier = getProposalPreferenceModifier({
     characteristics: [

@@ -1,5 +1,6 @@
 import React from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Pressable, SafeAreaView, ScrollView, View } from "react-native";
+import { AppText as Text } from "../../components/AppText";
 import type { DatingProfile } from "../../types/relationships";
 import {
   DatingBottomNavigation,
@@ -38,33 +39,33 @@ export function DatingMatchesScreen({
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.appScreenHeader}>
           <Pressable onPress={onBack} style={styles.headerSideButton}>
-            <Text>{"<"}</Text>
+            <Text variant="buttonText">{"<"}</Text>
           </Pressable>
           <View style={styles.appScreenHeaderTitleWrap}>
-            <Text style={styles.screenTitle}>Dating App</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Dating App</Text>
           </View>
           <Pressable onPress={onClose} style={styles.headerSideButton}>
-            <Text>X</Text>
+            <Text variant="buttonText">X</Text>
           </Pressable>
         </View>
         <Pressable onPress={onHome} style={styles.box}>
-          <Text>Home</Text>
+          <Text variant="buttonText">Home</Text>
         </Pressable>
 
         <View style={styles.matchesHeadingRow}>
           <View style={styles.detailGroup}>
-            <Text style={styles.sectionTitle}>Matches</Text>
-            <Text>People who liked you back</Text>
+            <Text variant="sectionTitle" style={styles.sectionTitle}>Matches</Text>
+            <Text variant="smallText">People who liked you back</Text>
           </View>
           <View style={styles.detailGroupRight}>
-            <Text>{`${activeDatingMatches.length} / 7`}</Text>
+            <Text variant="label">{`${activeDatingMatches.length} / 7`}</Text>
           </View>
         </View>
 
         {activeDatingMatches.length === 0 ? (
           <View style={styles.detailGroup}>
-            <Text>No matches yet.</Text>
-            <Text>Keep exploring profiles to meet someone.</Text>
+            <Text variant="smallText">No matches yet.</Text>
+            <Text variant="smallText">Keep exploring profiles to meet someone.</Text>
           </View>
         ) : (
           activeDatingMatches.map((match) => (
@@ -79,17 +80,17 @@ export function DatingMatchesScreen({
                   <View style={styles.smallProfileIconBody} />
                 </View>
                 <View style={styles.matchRowContent}>
-                  <Text>{`${match.firstName} ${match.lastName}, ${matchAgesById[match.id]}`}</Text>
-                  <Text>{match.job}</Text>
-                  <Text>You matched!</Text>
+                  <Text variant="cardTitle">{`${match.firstName} ${match.lastName}, ${matchAgesById[match.id]}`}</Text>
+                  <Text variant="smallText">{match.job}</Text>
+                  <Text variant="label">You matched!</Text>
                 </View>
-                <Text>{">"}</Text>
+                <Text variant="buttonText">{">"}</Text>
               </View>
             </Pressable>
           ))
         )}
 
-        {activeDatingMatches.length >= 7 ? <Text>Match limit reached.</Text> : null}
+        {activeDatingMatches.length >= 7 ? <Text variant="smallText">Match limit reached.</Text> : null}
         <DatingBottomNavigation
           styles={styles}
           currentSection="matches"

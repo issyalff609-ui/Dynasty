@@ -9,11 +9,17 @@ import type {
   Role,
 } from "../types/character";
 import type { Degree } from "../types/education";
-import type { House, Household } from "../types/household";
+import type {
+  Household,
+  NeighbourhoodQuality,
+  Property,
+  PropertyCondition,
+} from "../types/household";
 import type { JobAssignment, PartTimeJobListing } from "../types/jobs";
 import { startCareerRecord } from "../systems/careers";
 import { getInitialHouseholdReputation } from "../systems/reputation";
 import { getMarried } from "../systems/relationships";
+import { createPropertyMarket } from "../systems/property";
 import { pickOne, randomInt } from "../utils/random";
 import {
   createMemory,
@@ -21,10 +27,89 @@ import {
   pickNamePoolForCountry,
 } from "./characterGenerator";
 
-export const buildHouseFromIncome = (
+const pickPropertyCondition = (
   householdIncomeGBP: number,
-  residentIds: string[]
-): House => {
+  valueGBP: number
+): PropertyCondition => {
+  const roll = Math.random();
+
+  if (householdIncomeGBP >= 250000 || valueGBP >= 900000) {
+    if (roll < 0.03) return "poor";
+    if (roll < 0.12) return "needs_maintenance";
+    if (roll < 0.72) return "good";
+    return "outstanding";
+  }
+
+  if (householdIncomeGBP >= 120000 || valueGBP >= 450000) {
+    if (roll < 0.05) return "poor";
+    if (roll < 0.2) return "needs_maintenance";
+    if (roll < 0.85) return "good";
+    return "outstanding";
+  }
+
+  if (householdIncomeGBP >= 70000 || valueGBP >= 240000) {
+    if (roll < 0.1) return "poor";
+    if (roll < 0.3) return "needs_maintenance";
+    if (roll < 0.93) return "good";
+    return "outstanding";
+  }
+
+  if (householdIncomeGBP >= 35000 || valueGBP >= 140000) {
+    if (roll < 0.18) return "poor";
+    if (roll < 0.48) return "needs_maintenance";
+    if (roll < 0.98) return "good";
+    return "outstanding";
+  }
+
+  if (roll < 0.28) return "poor";
+  if (roll < 0.68) return "needs_maintenance";
+  if (roll < 0.995) return "good";
+  return "outstanding";
+};
+
+const pickNeighbourhoodQuality = (householdIncomeGBP: number): NeighbourhoodQuality => {
+  const roll = Math.random();
+
+  if (householdIncomeGBP >= 250000) {
+    if (roll < 0.03) return "poor";
+    if (roll < 0.18) return "average";
+    if (roll < 0.68) return "good";
+    return "excellent";
+  }
+
+  if (householdIncomeGBP >= 120000) {
+    if (roll < 0.06) return "poor";
+    if (roll < 0.32) return "average";
+    if (roll < 0.84) return "good";
+    return "excellent";
+  }
+
+  if (householdIncomeGBP >= 70000) {
+    if (roll < 0.12) return "poor";
+    if (roll < 0.52) return "average";
+    if (roll < 0.92) return "good";
+    return "excellent";
+  }
+
+  if (householdIncomeGBP >= 35000) {
+    if (roll < 0.18) return "poor";
+    if (roll < 0.68) return "average";
+    if (roll < 0.97) return "good";
+    return "excellent";
+  }
+
+  if (roll < 0.34) return "poor";
+  if (roll < 0.9) return "average";
+  if (roll < 0.995) return "good";
+  return "excellent";
+};
+
+export const buildPropertyFromIncome = (
+  householdIncomeGBP: number,
+  residentIds: string[],
+  ownerIds: string[],
+  propertyId = "property-family-home"
+): Property => {
   let bedrooms = 2;
   let bathrooms = 1;
   let valueGBP = randomInt(90000, 180000);
@@ -58,11 +143,26 @@ export const buildHouseFromIncome = (
     bathrooms = 1;
   }
 
+  const condition = pickPropertyCondition(householdIncomeGBP, valueGBP);
+  const neighbourhoodQuality = pickNeighbourhoodQuality(householdIncomeGBP);
+
   return {
+    id: propertyId,
     bedrooms,
     bathrooms,
     valueGBP,
+    condition,
+    neighbourhoodQuality,
+    ownerIds,
+    ownershipShares:
+      ownerIds.length === 0
+        ? {}
+        : Object.fromEntries(
+            ownerIds.map((ownerId) => [ownerId, Math.round(100 / ownerIds.length)])
+          ),
     residentIds,
+    propertyUse: "residence",
+    mortgageId: null,
   };
 };
 
@@ -285,7 +385,12 @@ export const buildHousehold = ({
   );
   const residentIds = characters.map((character) => character.id);
   const householdIncomeGBP = parentOne.annualIncomeGBP + parentTwo.annualIncomeGBP;
-  const house = buildHouseFromIncome(householdIncomeGBP, residentIds);
+  const ownerIds = [marriedParentOne.id, marriedParentTwo.id];
+  const property = buildPropertyFromIncome(
+    householdIncomeGBP,
+    residentIds,
+    ownerIds
+  );
 
   const withRelationships = characters.map((character) => {
     const relationshipScores: Record<string, number> = {};
@@ -299,6 +404,11 @@ export const buildHousehold = ({
     return {
       ...character,
       relationshipScores,
+      livingSituation: {
+        type: "family_home" as const,
+        propertyId: property.id,
+      },
+      familyHomePropertyId: property.id,
     };
   });
 
@@ -307,18 +417,18 @@ export const buildHousehold = ({
     country,
     familyLastName: lastName,
     netWorthGBP: Math.max(
-      house.valueGBP,
-      house.valueGBP + randomInt(-25000, 90000),
-      Math.round((house.valueGBP * randomInt(85, 115)) / 100)
+      property.valueGBP,
+      property.valueGBP + randomInt(-25000, 90000),
+      Math.round((property.valueGBP * randomInt(85, 115)) / 100)
     ),
     householdIncomeGBP,
     householdPlayerIncomeGBP: 0,
     householdOtherIncomeGBP: householdIncomeGBP,
     householdPlayerNetWorthGBP: 0,
     householdOtherNetWorthGBP: Math.max(
-      house.valueGBP,
-      house.valueGBP + randomInt(-25000, 90000),
-      Math.round((house.valueGBP * randomInt(85, 115)) / 100)
+      property.valueGBP,
+      property.valueGBP + randomInt(-25000, 90000),
+      Math.round((property.valueGBP * randomInt(85, 115)) / 100)
     ),
     reputation: getInitialHouseholdReputation(),
     tbcFlags: [
@@ -336,7 +446,9 @@ export const buildHousehold = ({
       "Autonomous actions like getting a job.",
       "Younger siblings.",
     ],
-    house,
+    properties: [property],
+    propertyMarket: createPropertyMarket(currentYear),
+    propertyMortgages: [],
     originalPlayerId: withRelationships[0].id,
     currentCharacterId: withRelationships[0].id,
     characters: withRelationships,

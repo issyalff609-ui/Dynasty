@@ -38,6 +38,8 @@ export type RelationshipSpaceStatus = {
 export type RomanticRelationship = {
   id: string;
   personId: string;
+  friendshipScore?: number;
+  romanceScore?: number;
   currentStatus: RomanticRelationshipStatus;
   startYear: number;
   engagementYear: number | null;

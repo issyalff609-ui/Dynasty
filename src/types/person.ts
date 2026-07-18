@@ -179,6 +179,24 @@ export type RecentRelationshipLifeEvent = {
   relatedPersonId: string | null;
 };
 
+export type LivingSituation =
+  | {
+      type: "family_home";
+      propertyId: string;
+    }
+  | {
+      type: "property";
+      propertyId: string;
+    }
+  | {
+      type: "staying_with_person";
+      hostId: string;
+      propertyId: string;
+    }
+  | {
+      type: "homeless";
+    };
+
 export type Person = {
   id: string;
   firstName: string;
@@ -239,6 +257,8 @@ export type Person = {
   classmates: Classmate[];
   friends: Friend[];
   relationshipScores: Record<string, number>;
+  livingSituation: LivingSituation;
+  familyHomePropertyId: string | null;
   memories: Memory[];
   proposalHistory: ProposalRecord[];
   diary: DiaryEntry[];

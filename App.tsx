@@ -1,17 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
+} from "@expo-google-fonts/plus-jakarta-sans";
+import { useFonts } from "expo-font";
+import {
   Alert,
+  Image,
   Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
-import { CharacterHeader } from "./src/components/CharacterHeader";
+import { AppText as Text } from "./src/components/AppText";
 import { PersonCard } from "./src/components/PersonCard";
+import { RelationshipBar } from "./src/components/RelationshipBar";
 import { SectionCard } from "./src/components/SectionCard";
 import { StatBar } from "./src/components/StatBar";
+import { TypographyProvider } from "./src/theme/typography";
 import {
   MAXIMUM_DATING_AGE,
   PARTNER_DATE_ACTIVITIES,
@@ -122,12 +132,38 @@ import {
   recalculateHouseholdFinance,
 } from "./src/systems/finances";
 import {
+  calculateAnnualMortgageRepaymentGBP,
+  getPropertyEquityGBP,
+  getMinimumMortgageDepositGBP,
+  MORTGAGE_ANNUAL_INTEREST_RATE,
+  MORTGAGE_DEPOSIT_PERCENT,
+  MORTGAGE_TERM_YEARS,
+} from "./src/systems/propertyFinance";
+import {
+  calculateHouseholdOvercrowding,
+  getEffectiveMood,
+  getCharacterResidence,
+  getCharacterOwnershipShare,
   getCurrentHouseholdCharacter,
+  getCurrentHouseholdProperty,
+  getCurrentHouseholdPropertyResidents,
   getFamilyMembers,
-  getHouseResidents,
+  getHousingMoodEffect,
   isSwitchableImmediateFamilyMember,
   getOriginalPlayerCharacter,
 } from "./src/systems/household";
+import {
+  applyPurchasedPropertyDecision,
+  describeCurrentLivingSituation,
+  getEligibleCoBuyers,
+  getEligibleFriendHosts,
+  getEligibleSiblingHosts,
+  leaveCurrentResidenceWithoutReplacement,
+  moveBackHome,
+  moveOutOfFamilyHome,
+  purchaseProperty,
+  stayWithHost,
+} from "./src/systems/property";
 import {
   getDatingRoseStateForYear,
   getDefaultDatingPreferences,
@@ -193,7 +229,12 @@ import type {
   Role,
 } from "./src/types/character";
 import type { Degree } from "./src/types/education";
-import type { Household } from "./src/types/household";
+import type {
+  Household,
+  NeighbourhoodQuality,
+  Property,
+  PropertyCondition,
+} from "./src/types/household";
 import type {
   ActivityDefinition,
   FullTimeJobListing,
@@ -211,6 +252,7 @@ import type {
 import { clamp } from "./src/utils/maths";
 import { convertLocalToGBP, formatMoney } from "./src/utils/money";
 import { randomInt } from "./src/utils/random";
+import { formatAppearanceScore } from "./src/utils/statFormatting";
 
 const createCharacter = (
   role: Role,
@@ -262,6 +304,20 @@ const getAcademicPerformanceBreakdown = (character: Character) => {
   };
 };
 
+const PROPERTY_CONDITION_LABELS: Record<PropertyCondition, string> = {
+  poor: "Poor",
+  needs_maintenance: "Needs maintenance",
+  good: "Good",
+  outstanding: "Outstanding",
+};
+
+const NEIGHBOURHOOD_QUALITY_LABELS: Record<NeighbourhoodQuality, string> = {
+  poor: "Poor",
+  average: "Average",
+  good: "Good",
+  excellent: "Excellent",
+};
+
 const isHighEarner = (incomeGBP: number) => incomeGBP >= 120000;
 
 const buildHousehold = (): Household =>
@@ -279,8 +335,62 @@ const scoreText = (label: string, value: number) => `${label}: ${value}/100`;
 const formatDatingAgeLabel = (age: number) =>
   age >= MAXIMUM_DATING_AGE ? `${MAXIMUM_DATING_AGE}+` : `${age}`;
 
+const getMoodState = (mood: number) => {
+  if (mood <= 5) return "Depressed";
+  if (mood <= 11) return "Struggling";
+  if (mood <= 20) return "Low";
+  if (mood <= 30) return "Down";
+  if (mood <= 40) return "Okay";
+  if (mood <= 50) return "Content";
+  if (mood <= 60) return "Satisfied";
+  if (mood <= 80) return "Happy";
+  if (mood <= 90) return "Ecstatic";
+  return "Thriving";
+};
+
+const formatMoodText = (mood: number) => `Feeling ${getMoodState(mood)}`;
+
+const getHealthState = (health: number) => {
+  if (health <= 5) return "Critical";
+  if (health <= 11) return "Seriously Ill";
+  if (health <= 20) return "Very Poor";
+  if (health <= 30) return "Poor";
+  if (health <= 40) return "Below Average";
+  if (health <= 50) return "Average";
+  if (health <= 60) return "Healthy";
+  if (health <= 80) return "Very Healthy";
+  if (health <= 90) return "Excellent";
+  return "Top Condition";
+};
+
+const formatHealthText = (health: number) => getHealthState(health);
+
+const FEMALE_PLAYER_PROFILE_IMAGES = {
+  White: require("./src/assets/profile-portraits/whiteV1.jpg"),
+  Brown: require("./src/assets/profile-portraits/brownV1.jpg"),
+  Asian: require("./src/assets/profile-portraits/asianV1.jpg"),
+  Black: require("./src/assets/profile-portraits/blackV1.jpg"),
+} as const;
+
+const MALE_PLAYER_PROFILE_IMAGES = {
+  White: require("./src/assets/profile-portraits/whiteV1_male.jpg"),
+  Brown: require("./src/assets/profile-portraits/brownV1_male.jpg"),
+  Asian: require("./src/assets/profile-portraits/asianV1_male.jpg"),
+  Black: require("./src/assets/profile-portraits/blackV1_male.jpg"),
+} as const;
+
+const SEASON_ICON = require("./src/assets/ui/sun.png");
+
 type AppScreen =
   | "home"
+  | "relationshipsHub"
+  | "assetsHub"
+  | "browsePropertiesHub"
+  | "propertyRealtorListings"
+  | "educationCareerHub"
+  | "activitiesHub"
+  | "dynastyHub"
+  | "settingsHub"
   | "saveLife"
   | "romance"
   | "romanceExes"
@@ -300,9 +410,23 @@ const isDatingAppScreen = (screen: AppScreen) =>
   screen === "datingAppMatches";
 
 export default function App() {
+  const [fontsLoaded, fontLoadError] = useFonts({
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
+  });
   const [initialAppState, setInitialAppState] = useState<InitialAppLoadState | null>(null);
   const [hasFinishedInitialLoad, setHasFinishedInitialLoad] = useState(false);
   const [initialLoadAttempt, setInitialLoadAttempt] = useState(0);
+  const fontsReady = fontsLoaded || Boolean(fontLoadError);
+
+  useEffect(() => {
+    if (fontLoadError) {
+      console.warn("Plus Jakarta Sans failed to load; using system fallback.", fontLoadError);
+    }
+  }, [fontLoadError]);
 
   useEffect(() => {
     let isMounted = true;
@@ -324,41 +448,39 @@ export default function App() {
     };
   }, [initialLoadAttempt]);
 
-  if (!hasFinishedInitialLoad || initialAppState === null) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.screenTitle}>Loading…</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!initialAppState.success) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.screenTitle}>Save Data Unavailable</Text>
-          <Text style={styles.recoveryText}>
-            Dynasties could not access your saved lives. Your existing saves may still be
-            safe. Please restart the app and try again.
-          </Text>
-          <Pressable
-            onPress={() => setInitialLoadAttempt((current) => current + 1)}
-            style={styles.innerBox}
-          >
-            <Text>Retry</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
-    <LoadedApp
-      hasFinishedInitialLoad={hasFinishedInitialLoad}
-      initialAppState={initialAppState}
-    />
+    <TypographyProvider useCustomFonts={fontsLoaded}>
+      {!fontsReady || !hasFinishedInitialLoad || initialAppState === null ? (
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.loadingContainer}>
+            <Text variant="screenTitle" style={styles.screenTitle}>Loading…</Text>
+          </View>
+        </SafeAreaView>
+      ) : !initialAppState.success ? (
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.loadingContainer}>
+            <Text variant="screenTitle" style={styles.screenTitle}>
+              Save Data Unavailable
+            </Text>
+            <Text variant="smallText" style={styles.recoveryText}>
+              Dynasties could not access your saved lives. Your existing saves may still be
+              safe. Please restart the app and try again.
+            </Text>
+            <Pressable
+              onPress={() => setInitialLoadAttempt((current) => current + 1)}
+              style={styles.innerBox}
+            >
+              <Text variant="buttonText">Retry</Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+      ) : (
+        <LoadedApp
+          hasFinishedInitialLoad={hasFinishedInitialLoad}
+          initialAppState={initialAppState}
+        />
+      )}
+    </TypographyProvider>
   );
 }
 
@@ -384,10 +506,29 @@ function LoadedApp({
     action: "save" | "load" | "delete";
   } | null>(null);
   const [playerDetailsVisible, setPlayerDetailsVisible] = useState(false);
+  const [playerProfileEngineeringVisible, setPlayerProfileEngineeringVisible] =
+    useState(false);
   const [familyVisible, setFamilyVisible] = useState(false);
   const [familyStatsVisible, setFamilyStatsVisible] = useState(false);
   const [houseVisible, setHouseVisible] = useState(false);
+  const [houseEngineeringVisible, setHouseEngineeringVisible] = useState(false);
   const [houseResidentsVisible, setHouseResidentsVisible] = useState(false);
+  const [stayWithFriendVisible, setStayWithFriendVisible] = useState(false);
+  const [stayWithSiblingVisible, setStayWithSiblingVisible] = useState(false);
+  const [browsePropertiesVisible, setBrowsePropertiesVisible] = useState(false);
+  const [normalPropertiesVisible, setNormalPropertiesVisible] = useState(false);
+  const [luxuryPropertiesVisible, setLuxuryPropertiesVisible] = useState(false);
+  const [selectedPropertyListingId, setSelectedPropertyListingId] = useState<string | null>(null);
+  const [browsePurchaseOptionsVisible, setBrowsePurchaseOptionsVisible] = useState(false);
+  const [selectedBrowseRealtorTier, setSelectedBrowseRealtorTier] = useState<
+    "luxury" | "normal" | null
+  >(null);
+  const [purchaseWithSomeoneVisible, setPurchaseWithSomeoneVisible] = useState(false);
+  const [pendingPurchaseCoBuyerId, setPendingPurchaseCoBuyerId] = useState<string | null>(null);
+  const [postPurchaseDecision, setPostPurchaseDecision] = useState<{
+    propertyId: string;
+    coBuyerId: string | null;
+  } | null>(null);
   const [educationVisible, setEducationVisible] = useState(false);
   const [classroomVisible, setClassroomVisible] = useState(false);
   const [selectedClassmateId, setSelectedClassmateId] = useState<string | null>(null);
@@ -398,6 +539,7 @@ function LoadedApp({
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
   const [datingAppVisible, setDatingAppVisible] = useState(false);
   const [partnerVisible, setPartnerVisible] = useState(false);
+  const [partnerEngineeringVisible, setPartnerEngineeringVisible] = useState(false);
   const [selectedExRelationshipId, setSelectedExRelationshipId] = useState<string | null>(null);
   const [selectedDatingMatchId, setSelectedDatingMatchId] = useState<string | null>(null);
   const [activeDatingProfileId, setActiveDatingProfileId] = useState<string | null>(null);
@@ -432,6 +574,10 @@ function LoadedApp({
   const [diaryVisible, setDiaryVisible] = useState(false);
   const [memoriesVisible, setMemoriesVisible] = useState(false);
   const [selectedFamilyMemberId, setSelectedFamilyMemberId] = useState<string | null>(null);
+  const [selectedFamilyEngineeringId, setSelectedFamilyEngineeringId] = useState<string | null>(
+    null
+  );
+
   const [tbcVisible, setTbcVisible] = useState(false);
   const [ideasVisible, setIdeasVisible] = useState(false);
   const [engineeringVisible, setEngineeringVisible] = useState(false);
@@ -509,6 +655,16 @@ function LoadedApp({
     () => getCurrentHouseholdCharacter(household),
     [household]
   );
+  const playerProfilePhotoSource =
+    currentCharacter.gender === "Female"
+      ? FEMALE_PLAYER_PROFILE_IMAGES[currentCharacter.race]
+      : currentCharacter.gender === "Male"
+        ? MALE_PLAYER_PROFILE_IMAGES[currentCharacter.race]
+      : null;
+  const playerDisplayNameLines = [
+    currentCharacter.firstName,
+    currentCharacter.lastName,
+  ];
 
   const originalPlayer = useMemo(
     () => getOriginalPlayerCharacter(household),
@@ -517,7 +673,27 @@ function LoadedApp({
 
   const familyMembers = getFamilyMembers(household);
 
-  const houseResidents = getHouseResidents(household);
+  const currentResidence = getCurrentHouseholdProperty(household);
+  const houseResidents = getCurrentHouseholdPropertyResidents(household);
+  const housingMoodEffect = getHousingMoodEffect(household, currentResidence);
+  const houseOvercrowding = calculateHouseholdOvercrowding(household);
+  const effectiveMood = getEffectiveMood(household, currentCharacter);
+  const currentLivingSituationText = describeCurrentLivingSituation(
+    household,
+    currentCharacter.id
+  );
+  const eligibleFriendHosts = getEligibleFriendHosts(household, currentCharacter.id);
+  const eligibleSiblingHosts = getEligibleSiblingHosts(household, currentCharacter.id);
+  const ownedProperties = household.properties.filter((property) =>
+    property.ownerIds.includes(currentCharacter.id)
+  );
+  const normalListings = household.propertyMarket.listings.filter(
+    (listing) => listing.realtorTier === "normal"
+  );
+  const luxuryListings = household.propertyMarket.listings.filter(
+    (listing) => listing.realtorTier === "luxury"
+  );
+  const eligibleCoBuyers = getEligibleCoBuyers(household, currentCharacter.id);
 
   const currentEducationStatus = getEducationStatus(
     currentCharacter,
@@ -813,6 +989,15 @@ function LoadedApp({
   }, [currentScreen]);
 
   useEffect(() => {
+    if (houseVisible) {
+      return;
+    }
+
+    setHouseEngineeringVisible(false);
+    setHouseResidentsVisible(false);
+  }, [houseVisible]);
+
+  useEffect(() => {
     if (!datingDiscoverVisible || !currentDatingProfile) {
       return;
     }
@@ -854,9 +1039,9 @@ function LoadedApp({
   const livesTogetherWithPartner = useMemo(
     () =>
       !!partnerCharacter &&
-      household.house.residentIds.includes(currentCharacter.id) &&
-      household.house.residentIds.includes(partnerCharacter.id),
-    [currentCharacter.id, household.house.residentIds, partnerCharacter]
+      getCharacterResidence(household, currentCharacter.id)?.id ===
+        getCharacterResidence(household, partnerCharacter.id)?.id,
+    [currentCharacter.id, household, partnerCharacter]
   );
   const availableConversationTopics = useMemo(
     () =>
@@ -1129,31 +1314,51 @@ function LoadedApp({
   };
 
   const interactWithMatch = (matchId: string) => {
+    const currentHousehold = latestHouseholdRef.current;
     const resolution = resolveDatingMatchTextInteraction({
-      character: currentCharacter,
+      character: getCurrentHouseholdCharacter(currentHousehold),
       matchId,
     });
     if (!resolution) {
       return;
     }
 
-    updateCurrentCharacter(() => resolution.character);
+    const nextHousehold = {
+      ...currentHousehold,
+      characters: currentHousehold.characters.map((character) =>
+        character.id === currentHousehold.currentCharacterId
+          ? resolution.character
+          : character
+      ),
+    };
+    latestHouseholdRef.current = nextHousehold;
+    setHousehold(nextHousehold);
+
     const resultLines = [resolution.message];
     if (resolution.friendshipChange !== 0) {
-      resultLines.push(`Friendship +${resolution.friendshipChange}`);
+      resultLines.push(
+        `Friendship ${resolution.friendshipChange > 0 ? "+" : ""}${resolution.friendshipChange}`
+      );
     }
     if (resolution.romanceChange !== 0) {
-      resultLines.push(`Romance +${resolution.romanceChange}`);
+      resultLines.push(
+        `Romance ${resolution.romanceChange > 0 ? "+" : ""}${resolution.romanceChange}`
+      );
     }
     Alert.alert("Romance", resultLines.join("\n"));
   };
 
   const goOnDateWithSelectedMatch = (category: PartnerDateCategory) => {
+    const committedResultRef: {
+      current: ReturnType<typeof goOnDateWithMatch> | null;
+    } = { current: null };
     setHousehold((currentHousehold) => {
       const currentCharacter = currentHousehold.characters.find(
         (character) => character.id === currentHousehold.currentCharacterId
       );
       if (!currentCharacter || selectedDatingMatchId === null) {
+        committedResultRef.current = null;
+        latestHouseholdRef.current = currentHousehold;
         return currentHousehold;
       }
 
@@ -1161,24 +1366,20 @@ function LoadedApp({
         (item) => item.id === selectedDatingMatchId
       );
       if (!match || !match.matched) {
+        committedResultRef.current = null;
+        latestHouseholdRef.current = currentHousehold;
         return currentHousehold;
       }
 
       const result = goOnDateWithMatch(currentCharacter, match, category);
       if (!result.success) {
+        committedResultRef.current = result;
         Alert.alert("Go on a Date", result.text);
+        latestHouseholdRef.current = currentHousehold;
         return currentHousehold;
       }
 
-      Alert.alert(
-        "Go on a Date",
-        `${result.result.text}\n\n${formatMoney(
-          result.result.costGBP,
-          currentHousehold.country
-        )}\nFriendship +${result.result.friendshipChange}\nRomance +${result.result.romanceChange}`
-      );
-
-      return {
+      const nextHousehold = {
         ...currentHousehold,
         characters: currentHousehold.characters.map((character) =>
           character.id === currentCharacter.id
@@ -1191,7 +1392,21 @@ function LoadedApp({
             : character
         ),
       };
+      committedResultRef.current = result;
+      latestHouseholdRef.current = nextHousehold;
+      return nextHousehold;
     });
+
+    const committedResult = committedResultRef.current;
+    if (committedResult?.success) {
+      Alert.alert(
+        "Go on a Date",
+        `${committedResult.result.text}\n\n${formatMoney(
+          committedResult.result.costGBP,
+          latestHouseholdRef.current.country
+        )}\nFriendship +${committedResult.result.friendshipChange}\nRomance +${committedResult.result.romanceChange}`
+      );
+    }
 
     setMatchGoOnDateVisible(false);
   };
@@ -1216,15 +1431,23 @@ function LoadedApp({
   };
 
   const startRelationshipWithMatch = (matchId: string) => {
-    const currentHousehold = latestHouseholdRef.current;
-    const result = resolveStartRelationshipWithMatch({
-      household: currentHousehold,
-      matchId,
+    const committedResultRef: {
+      current: ReturnType<typeof resolveStartRelationshipWithMatch> | null;
+    } = { current: null };
+
+    setHousehold((currentHousehold) => {
+      const result = resolveStartRelationshipWithMatch({
+        household: currentHousehold,
+        matchId,
+      });
+      committedResultRef.current = result;
+      latestHouseholdRef.current = result.household;
+      return result.household;
     });
 
-    if (result.household !== currentHousehold) {
-      latestHouseholdRef.current = result.household;
-      setHousehold(result.household);
+    const result = committedResultRef.current;
+    if (!result) {
+      return;
     }
 
     if (result.status === "accepted") {
@@ -1288,7 +1511,16 @@ function LoadedApp({
     setFamilyVisible(false);
     setFamilyStatsVisible(false);
     setHouseVisible(false);
+    setHouseEngineeringVisible(false);
     setHouseResidentsVisible(false);
+    setBrowsePropertiesVisible(false);
+    setLuxuryPropertiesVisible(false);
+    setNormalPropertiesVisible(false);
+    setSelectedPropertyListingId(null);
+    setBrowsePurchaseOptionsVisible(false);
+    setSelectedBrowseRealtorTier(null);
+    setPurchaseWithSomeoneVisible(false);
+    setPendingPurchaseCoBuyerId(null);
     setEducationVisible(false);
     setClassroomVisible(false);
     setSelectedClassmateId(null);
@@ -1328,6 +1560,121 @@ function LoadedApp({
     closeAllPanels();
     setSelectedDatingMatchId(null);
     setCurrentScreen("home");
+  };
+
+  const commitHouseholdWithFinance = (nextHousehold: Household) => {
+    const finance = recalculateHouseholdFinance(
+      nextHousehold,
+      nextHousehold.characters,
+      nextHousehold.currentCharacterId,
+      nextHousehold.netWorthGBP
+    );
+
+    setHousehold({
+      ...nextHousehold,
+      ...finance,
+    });
+  };
+
+  const handleMoveOut = () => {
+    if (currentCharacterAge < 16) {
+      Alert.alert("Housing", "You must be 16 to move out.");
+      return;
+    }
+
+    Alert.alert(
+      "Housing",
+      "Move out of the family home?\n\nYou do not currently have anywhere else to live. You will become homeless until you find somewhere to stay or purchase a property.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Move Out",
+          onPress: () => {
+            commitHouseholdWithFinance(
+              moveOutOfFamilyHome(latestHouseholdRef.current, latestHouseholdRef.current.currentCharacterId)
+            );
+          },
+        },
+      ]
+    );
+  };
+
+  const handleMoveBackHome = () => {
+    commitHouseholdWithFinance(
+      moveBackHome(latestHouseholdRef.current, latestHouseholdRef.current.currentCharacterId)
+    );
+    Alert.alert("Housing", "You moved back into the family home.");
+  };
+
+  const handleStayWithHost = (hostId: string) => {
+    commitHouseholdWithFinance(
+      stayWithHost(latestHouseholdRef.current, latestHouseholdRef.current.currentCharacterId, hostId)
+    );
+  };
+
+  const handleLeaveCurrentStay = () => {
+    commitHouseholdWithFinance(
+      leaveCurrentResidenceWithoutReplacement(
+        latestHouseholdRef.current,
+        latestHouseholdRef.current.currentCharacterId
+      )
+    );
+  };
+
+  const completePropertyPurchase = (
+    listingId: string,
+    purchaseMethod: "cash" | "mortgage",
+    coBuyerId: string | null
+  ) => {
+    const result = purchaseProperty({
+      household: latestHouseholdRef.current,
+      listingId,
+      buyerId: latestHouseholdRef.current.currentCharacterId,
+      coBuyerId,
+      purchaseMethod,
+    });
+
+    if (result.status === "buyer_underage") {
+      Alert.alert("Housing", "You must be 18 to purchase a property.");
+      return;
+    }
+
+    if (result.status === "cannot_afford") {
+      Alert.alert("Housing", "You cannot afford this.");
+      return;
+    }
+
+    if (result.status !== "success") {
+      Alert.alert("Housing", "That property is no longer available.");
+      return;
+    }
+
+    commitHouseholdWithFinance(result.household);
+    setPostPurchaseDecision({
+      propertyId: result.propertyId,
+      coBuyerId: result.coBuyerId,
+    });
+    setSelectedPropertyListingId(null);
+    setPurchaseWithSomeoneVisible(false);
+    setPendingPurchaseCoBuyerId(null);
+    Alert.alert("Housing", "Property purchased.");
+  };
+
+  const handlePropertyDecision = (action: "live_here" | "rent_out") => {
+    if (!postPurchaseDecision) {
+      return;
+    }
+
+    commitHouseholdWithFinance(
+      applyPurchasedPropertyDecision({
+        household: latestHouseholdRef.current,
+        propertyId: postPurchaseDecision.propertyId,
+        buyerId: latestHouseholdRef.current.currentCharacterId,
+        coBuyerId: postPurchaseDecision.coBuyerId,
+        action,
+      })
+    );
+    setPostPurchaseDecision(null);
   };
 
   const runManualLifeOperation = async (
@@ -1464,6 +1811,7 @@ function LoadedApp({
     closeAllPanels();
     setCurrentScreen("romance");
     setPartnerVisible(true);
+    setPartnerEngineeringVisible(false);
     setSelectedDatingMatchId(null);
     setSelectedExRelationshipId(null);
   };
@@ -1474,102 +1822,158 @@ function LoadedApp({
     }
 
     return (
-      <View style={styles.detailBox}>
-        <Text>{`Age: ${getDatingProfileAge(
-          currentCharacter.partner,
-          household.currentYear
-        )}`}</Text>
-        <Text>{`Friendship: ${currentCharacter.partner.friendshipScore}/100`}</Text>
-        <Text>{`Romance: ${currentCharacter.partner.romanceScore}/100`}</Text>
-        <Text style={styles.testingText}>{`Chemistry: ${
-          !currentCharacter.partner.chemistryUnlocked ||
-          currentCharacter.partner.chemistry === null
-            ? "???"
-            : `${currentCharacter.partner.chemistry}/100`
-        }`}</Text>
-        <Text style={styles.testingText}>{`Attraction: ${currentCharacter.partner.attractiveness}/100`}</Text>
-        <Text>{`Appearance: ${currentCharacter.partner.appearance}/100`}</Text>
-        <Text>{`Intelligence: ${currentCharacter.partner.intelligence}/100`}</Text>
-        <Text>{`Traits: ${labelList(currentCharacter.partner.traits)}`}</Text>
-        <Text>{`Job: ${currentCharacter.partner.job}`}</Text>
-        <Text>{`Income: ${formatMoney(
-          currentCharacter.partner.annualIncomeGBP,
-          household.country
-        )}`}</Text>
-        <Text>{`Race: ${currentCharacter.partner.race}`}</Text>
-        <Text style={styles.testingText}>
-          {scoreText("Career Ceiling", currentCharacter.partner.careerCeiling)}
-        </Text>
+      <View style={styles.partnerDetailBox}>
+        <Pressable
+          onPress={() => setPartnerEngineeringVisible((current) => !current)}
+          style={styles.partnerEngineeringButton}
+        >
+          <Text variant="buttonText">?</Text>
+        </Pressable>
+        {partnerEngineeringVisible ? (
+          <View style={styles.detailGroup}>
+            <Text>{`Chemistry: ${
+              !currentCharacter.partner.chemistryUnlocked ||
+              currentCharacter.partner.chemistry === null
+                ? "???"
+                : `${currentCharacter.partner.chemistry}/100`
+            }`}</Text>
+            <Text>{`Attraction: ${currentCharacter.partner.attractiveness}/100`}</Text>
+            <Text>{`Friendship: ${currentCharacter.partner.friendshipScore}/100`}</Text>
+            <Text>{`Romance: ${currentCharacter.partner.romanceScore}/100`}</Text>
+            <Text>{`Appearance: ${currentCharacter.partner.appearance}/100`}</Text>
+            <Text>{`Income: ${formatMoney(
+              currentCharacter.partner.annualIncomeGBP,
+              household.country
+            )}`}</Text>
+            <Text>{`Race: ${currentCharacter.partner.race}`}</Text>
+          </View>
+        ) : (
+          <View style={styles.detailGroup}>
+            <Text>
+              <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                Age:{" "}
+              </Text>
+              <Text>{getDatingProfileAge(currentCharacter.partner, household.currentYear)}</Text>
+            </Text>
+            <Text>
+              <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                Appearance:{" "}
+              </Text>
+              <Text>{formatAppearanceScore(currentCharacter.partner.appearance)}</Text>
+            </Text>
+            <Text>
+              <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                Intelligence:{" "}
+              </Text>
+              <Text>{`${currentCharacter.partner.intelligence}/100`}</Text>
+            </Text>
+            <Text>
+              <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                Job:{" "}
+              </Text>
+              <Text>{currentCharacter.partner.job}</Text>
+            </Text>
+            <Text>
+              <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                Traits:{" "}
+              </Text>
+              <Text>{labelList(currentCharacter.partner.traits)}</Text>
+            </Text>
+          </View>
+        )}
         <Pressable
           onPress={partnerActionHandlers.togglePartnerActions}
-          style={styles.innerBox}
+          style={[
+            styles.partnerActionsButton,
+            partnerActionsVisible ? styles.partnerActionsButtonExpanded : null,
+          ]}
         >
-          <Text>Actions</Text>
+          <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+            Interact
+          </Text>
         </Pressable>
         {partnerActionsVisible ? (
-          <View style={styles.detailBox}>
+          <View style={styles.partnerActionsMenu}>
             <Pressable
               onPress={partnerActionHandlers.spendTimeWithPartner}
-              style={styles.innerBox}
+              style={styles.partnerMenuActionButton}
             >
-              <Text>Spend Time Together</Text>
+              <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                Spend Time Together
+              </Text>
             </Pressable>
             <Pressable
               onPress={partnerActionHandlers.toggleGoOnDateMenu}
-              style={styles.innerBox}
+              style={styles.partnerMenuActionButton}
             >
-              <Text>Go on a Date</Text>
+              <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                Go on a Date...
+              </Text>
             </Pressable>
             {goOnDateVisible ? (
-              <View style={styles.detailBox}>
+              <View style={styles.partnerSubmenu}>
                 <Pressable
                   onPress={() => partnerActionHandlers.goOnDateWithPartner("free")}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>{`Free Date (${dateCategoryRanges.free})`}</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    {`Free Date (${dateCategoryRanges.free})`}
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => partnerActionHandlers.goOnDateWithPartner("cheap")}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>{`Cheap Date (${dateCategoryRanges.cheap})`}</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    {`Cheap Date (${dateCategoryRanges.cheap})`}
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => partnerActionHandlers.goOnDateWithPartner("fun")}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>{`Fun Date (${dateCategoryRanges.fun})`}</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    {`Fun Date (${dateCategoryRanges.fun})`}
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => partnerActionHandlers.goOnDateWithPartner("expensive")}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>{`Expensive Date (${dateCategoryRanges.expensive})`}</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    {`Expensive Date (${dateCategoryRanges.expensive})`}
+                  </Text>
                 </Pressable>
               </View>
             ) : null}
             <Pressable
               onPress={partnerActionHandlers.toggleConversationMenu}
-              style={styles.innerBox}
+              style={styles.partnerMenuActionButton}
             >
-              <Text>Have a Conversation About…</Text>
+              <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                Have a Conversation About...
+              </Text>
             </Pressable>
             {conversationVisible ? (
-              <View style={styles.detailBox}>
+              <View style={styles.partnerSubmenu}>
                 {availableConversationTopics.includes("children") ? (
                   <Pressable
                     onPress={() => partnerActionHandlers.haveConversationWithPartner("children")}
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Children</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Children
+                    </Text>
                   </Pressable>
                 ) : null}
                 {availableConversationTopics.includes("marriage") ? (
                   <Pressable
                     onPress={() => partnerActionHandlers.haveConversationWithPartner("marriage")}
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Marriage</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Marriage
+                    </Text>
                   </Pressable>
                 ) : null}
                 {availableConversationTopics.includes("moving_in") ? (
@@ -1577,21 +1981,25 @@ function LoadedApp({
                     onPress={() =>
                       partnerActionHandlers.haveConversationWithPartner("moving_in")
                     }
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Moving In Together</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Moving In Together
+                    </Text>
                   </Pressable>
                 ) : null}
                 {availableConversationTopics.includes("boundaries") ? (
                   <>
                     <Pressable
                       onPress={partnerActionHandlers.toggleBoundaryConversationMenu}
-                      style={styles.innerBox}
+                      style={styles.partnerMenuActionButton}
                     >
-                      <Text>Boundaries</Text>
+                      <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                        Boundaries
+                      </Text>
                     </Pressable>
                     {boundaryConversationVisible ? (
-                      <View style={styles.detailBox}>
+                      <View style={styles.partnerSubmenu}>
                         <Pressable
                           onPress={() =>
                             partnerActionHandlers.haveConversationWithPartner(
@@ -1599,9 +2007,11 @@ function LoadedApp({
                               "staying_close_with_an_ex"
                             )
                           }
-                          style={styles.innerBox}
+                          style={styles.partnerMenuActionButton}
                         >
-                          <Text>Staying Close with an Ex</Text>
+                          <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                            Staying Close with an Ex
+                          </Text>
                         </Pressable>
                         <Pressable
                           onPress={() =>
@@ -1610,9 +2020,11 @@ function LoadedApp({
                               "closed_vs_open_relationship"
                             )
                           }
-                          style={styles.innerBox}
+                          style={styles.partnerMenuActionButton}
                         >
-                          <Text>Closed vs Open Relationship</Text>
+                          <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                            Closed vs Open Relationship
+                          </Text>
                         </Pressable>
                       </View>
                     ) : null}
@@ -1622,51 +2034,65 @@ function LoadedApp({
             ) : null}
             <Pressable
               onPress={partnerActionHandlers.toggleMajorDecisionsMenu}
-              style={styles.innerBox}
+              style={styles.partnerMenuActionButton}
             >
-              <Text>Major Decisions</Text>
+              <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                Major Decisions...
+              </Text>
             </Pressable>
             {majorDecisionsVisible ? (
-              <View style={styles.detailBox}>
+              <View style={styles.partnerSubmenu}>
                 <Pressable
                   onPress={partnerActionHandlers.moveInTogether}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Move in Together - WIP</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Move in Together - WIP
+                  </Text>
                 </Pressable>
                 {canOpenProposalPlanning ? (
                   <Pressable
                     onPress={partnerActionHandlers.openProposalPlanning}
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Propose</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Propose
+                    </Text>
                   </Pressable>
                 ) : null}
                 <Pressable
                   onPress={partnerActionHandlers.tryForBaby}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Try for a Baby - WIP</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Try for a Baby - WIP
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={partnerActionHandlers.purchasePropertyTogether}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Purchase a Property Together - WIP</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Purchase a Property Together - WIP
+                  </Text>
                 </Pressable>
                 {isEngagedWithPartner ? (
                   <>
                     <Pressable
                       onPress={partnerActionHandlers.planWedding}
-                      style={styles.innerBox}
+                      style={styles.partnerMenuActionButton}
                     >
-                      <Text>Plan Wedding - WIP</Text>
+                      <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                        Plan Wedding - WIP
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={partnerActionHandlers.elope}
-                      style={styles.innerBox}
+                      style={styles.partnerMenuActionButton}
                     >
-                      <Text>Elope - WIP</Text>
+                      <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                        Elope - WIP
+                      </Text>
                     </Pressable>
                   </>
                 ) : null}
@@ -1674,15 +2100,19 @@ function LoadedApp({
                   <>
                     <Pressable
                       onPress={partnerActionHandlers.combineFinances}
-                      style={styles.innerBox}
+                      style={styles.partnerMenuActionButton}
                     >
-                      <Text>Combine Finances</Text>
+                      <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                        Combine Finances
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={partnerActionHandlers.separateFinances}
-                      style={styles.innerBox}
+                      style={styles.partnerMenuActionButton}
                     >
-                      <Text>Separate Finances</Text>
+                      <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                        Separate Finances
+                      </Text>
                     </Pressable>
                   </>
                 ) : null}
@@ -1690,51 +2120,65 @@ function LoadedApp({
             ) : null}
             <Pressable
               onPress={partnerActionHandlers.toggleConflictMenu}
-              style={styles.innerBox}
+              style={styles.partnerMenuActionButton}
             >
-              <Text>Conflict</Text>
+              <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                Conflict...
+              </Text>
             </Pressable>
             {conflictVisible ? (
-              <View style={styles.detailBox}>
+              <View style={styles.partnerSubmenu}>
                 <Pressable
                   disabled={availableConflictIssues.length === 0}
                   onPress={partnerActionHandlers.confrontCurrentPartnerAboutIssue}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Confront About…</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Confront About...
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={partnerActionHandlers.askPartnerForSpaceAction}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Ask for Space</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Ask for Space
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={partnerActionHandlers.askPartnerToMoveOut}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Ask them to Move Out - WIP</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Ask them to Move Out - WIP
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={partnerActionHandlers.bickerWithPartnerAction}
-                  style={styles.innerBox}
+                  style={styles.partnerMenuActionButton}
                 >
-                  <Text>Bicker</Text>
+                  <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                    Bicker
+                  </Text>
                 </Pressable>
                 {isDatingPartner || isEngagedWithPartner ? (
                   <Pressable
                     onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Break Up</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Break Up
+                    </Text>
                   </Pressable>
                 ) : null}
                 {isMarriedToPartner ? (
                   <Pressable
                     onPress={partnerActionHandlers.breakUpOrDivorceCurrentPartner}
-                    style={styles.innerBox}
+                    style={styles.partnerMenuActionButton}
                   >
-                    <Text>Divorce</Text>
+                    <Text variant="buttonText" style={styles.partnerActionsButtonText}>
+                      Divorce
+                    </Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -1762,12 +2206,38 @@ function LoadedApp({
               step <= value ? styles.sliderStepActive : null,
             ]}
           >
-            <Text style={styles.sliderStepLabel}>{step}</Text>
+            <Text variant="caption" style={styles.sliderStepLabel}>{step}</Text>
           </Pressable>
         ))}
       </View>
     </View>
   );
+
+  const partnerActionHandlers = buildLoadedAppPartnerActionHandlers({
+    togglePartnerActions: () => setPartnerActionsVisible((value) => !value),
+    spendTimeWithPartner,
+    toggleGoOnDateMenu: () => setGoOnDateVisible((value) => !value),
+    goOnDateWithPartner,
+    toggleConversationMenu: () => setConversationVisible((value) => !value),
+    haveConversationWithPartner,
+    toggleBoundaryConversationMenu: () =>
+      setBoundaryConversationVisible((value) => !value),
+    toggleMajorDecisionsMenu: () => setMajorDecisionsVisible((value) => !value),
+    openProposalPlanning,
+    moveInTogether: () => showWipAlert("Move in Together"),
+    tryForBaby: () => showWipAlert("Try for a Baby"),
+    purchasePropertyTogether: () => showWipAlert("Purchase a Property Together"),
+    planWedding: () => showWipAlert("Plan Wedding"),
+    elope: () => showWipAlert("Elope"),
+    combineFinances: () => showWipAlert("Combine Finances"),
+    separateFinances: () => showWipAlert("Separate Finances"),
+    toggleConflictMenu: () => setConflictVisible((value) => !value),
+    askPartnerForSpaceAction,
+    askPartnerToMoveOut: () => showWipAlert("Ask them to Move Out"),
+    bickerWithPartnerAction,
+    breakUpOrDivorceCurrentPartner,
+    confrontCurrentPartnerAboutIssue,
+  });
 
   if (engineeringVisible) {
     return (
@@ -1775,14 +2245,14 @@ function LoadedApp({
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.engineeringHeader}>
             <View style={styles.detailGroup}>
-              <Text style={styles.engineeringTitle}>Engineering</Text>
+              <Text variant="screenTitle" style={styles.engineeringTitle}>Engineering</Text>
               <Text>{`${currentCharacter.firstName} ${currentCharacter.lastName}  Age ${currentCharacterAge}  ${household.country}`}</Text>
             </View>
             <Pressable
               onPress={() => setEngineeringVisible(false)}
               style={styles.innerBox}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
           </View>
 
@@ -1879,7 +2349,9 @@ function LoadedApp({
                           option.range[1],
                           household.country
                         )}`}</Text>
-                        <Text style={styles.testingText}>{option.note}</Text>
+                        <Text variant="smallText" style={styles.testingText}>
+                          {option.note}
+                        </Text>
                       </View>
                     ))}
                   </View>
@@ -1993,16 +2465,16 @@ function LoadedApp({
                 <Text>{`Raw total: ${academicPerformanceDebug.rawTotal.toFixed(2)}`}</Text>
                 <Text>{`Initial rolled score: ${academicPerformanceDebug.startingScore}/100`}</Text>
                 <Text>{`Performance band: ${academicPerformanceDebug.finalBand}`}</Text>
-                <Text style={styles.testingText}>
+                <Text variant="smallText" style={styles.testingText}>
                   The base score is rolled once at character creation. Study changes the live score after that.
                 </Text>
-                <Text style={styles.testingText}>
+                <Text variant="smallText" style={styles.testingText}>
                   Study scaling: age 5-7 x0.25, age 8-10 x0.50, age 11-13 x0.75, age 14-16 x0.90, age 17+ x1.00
                 </Text>
-                <Text style={styles.testingText}>
+                <Text variant="smallText" style={styles.testingText}>
                   Yearly low-intelligence drop while actively in education: 0-10 = 50% for -1 to -8, 11-20 = 40% for -1 to -5, 21-40 = 40% for -1 to -3
                 </Text>
-                <Text style={styles.testingText}>
+                <Text variant="smallText" style={styles.testingText}>
                   Excellent: 78+, Good: 62+, Average: 46+, Poor: 28+, otherwise Failing
                 </Text>
               </View>
@@ -2010,7 +2482,7 @@ function LoadedApp({
               <View style={styles.box}>
                 <Text>Classroom</Text>
                 <Text>{`Stored classmates: ${classmates.length}/6`}</Text>
-                <Text style={styles.testingText}>
+                <Text variant="smallText" style={styles.testingText}>
                   Same-age classmates before university. Each classmate has a 5% chance of replacement per year.
                 </Text>
                 {classmates.map((classmate) => (
@@ -2019,7 +2491,7 @@ function LoadedApp({
                     <Text>{`Age: ${classmate.age}`}</Text>
                     <Text>{`Relationship: ${classmate.relationship}/100`}</Text>
                     <Text>{`Compatibility: ${classmate.chemistry}/100`}</Text>
-                    <Text>{`Appearance: ${classmate.appearance}/100`}</Text>
+                    <Text>{`Appearance: ${formatAppearanceScore(classmate.appearance)}`}</Text>
                     <Text>{`Intelligence: ${classmate.intelligence}/100`}</Text>
                     <Text>{`Race: ${classmate.race}`}</Text>
                     <Text>{`Traits visible: ${
@@ -2118,9 +2590,9 @@ function LoadedApp({
               }}
               style={styles.headerBackButton}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Romance</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Romance</Text>
           </View>
 
           {romancePageSections.map((section) => {
@@ -2131,14 +2603,42 @@ function LoadedApp({
               currentPartnerLabel
             ) {
               return (
-                <View key={section} style={styles.box}>
+                <View key={section} style={styles.partnerCardContainer}>
                   <Pressable
-                    onPress={() => setPartnerVisible((value) => !value)}
-                    style={styles.innerBox}
+                    onPress={() => {
+                      setPartnerVisible((value) => !value);
+                      if (partnerVisible) {
+                        setPartnerEngineeringVisible(false);
+                      }
+                    }}
+                    style={[
+                      styles.partnerCard,
+                      partnerVisible ? styles.partnerCardExpanded : null,
+                    ]}
                   >
-                    <Text style={styles.fieldSectionTitle}>Current Partner</Text>
-                    <Text>{`${partnerCharacter.firstName} ${partnerCharacter.lastName}`}</Text>
-                    <Text>{currentPartnerLabel}</Text>
+                    <Text>
+                      <Text variant="cardTitle" weight="bold">
+                        {`${partnerCharacter.firstName} ${partnerCharacter.lastName}`}
+                      </Text>
+                      <Text variant="cardTitle" weight="medium">
+                        {` (${currentPartnerLabel})`}
+                      </Text>
+                    </Text>
+                    <View style={styles.detailGroup}>
+                      <RelationshipBar
+                        label="Friendship"
+                        value={currentCharacter.partner.friendshipScore}
+                        minValue={0}
+                        maxValue={100}
+                      />
+                      <RelationshipBar
+                        label="Romance"
+                        value={currentCharacter.partner.romanceScore}
+                        minValue={0}
+                        maxValue={100}
+                        fillColor="pink"
+                      />
+                    </View>
                   </Pressable>
                   {partnerVisible ? renderCurrentPartnerDetails() : null}
                 </View>
@@ -2155,7 +2655,7 @@ function LoadedApp({
                   }}
                   style={styles.box}
                 >
-                  <Text style={styles.fieldSectionTitle}>Exes</Text>
+                  <Text variant="cardTitle" style={styles.fieldSectionTitle}>Exes</Text>
                   <Text>{`${exRelationshipSummaries.length} recorded`}</Text>
                 </Pressable>
               );
@@ -2178,7 +2678,7 @@ function LoadedApp({
                   }}
                   style={styles.box}
                 >
-                  <Text>Dating App</Text>
+                  <Text variant="buttonText">Dating App</Text>
                 </Pressable>
               );
             }
@@ -2189,7 +2689,7 @@ function LoadedApp({
                 onPress={() => Alert.alert("Night Out", "Coming soon")}
                 style={styles.box}
               >
-                <Text>Night Out</Text>
+                <Text variant="buttonText">Night Out</Text>
               </Pressable>
             );
           })}
@@ -2204,9 +2704,9 @@ function LoadedApp({
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.screenHeader}>
             <Pressable onPress={goToHomeScreen} style={styles.headerBackButton}>
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Save Life</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Save Life</Text>
           </View>
 
           {manualLifeSlots.map((slot) => {
@@ -2214,7 +2714,7 @@ function LoadedApp({
 
             return (
               <View key={slot.slotId} style={styles.box}>
-                <Text style={styles.fieldSectionTitle}>{slot.slotLabel}</Text>
+                <Text variant="cardTitle" style={styles.fieldSectionTitle}>{slot.slotLabel}</Text>
                 {slot.summary ? (
                   <View style={styles.detailGroup}>
                     <Text>{slot.summary.activeCharacterName}</Text>
@@ -2284,9 +2784,9 @@ function LoadedApp({
               }}
               style={styles.headerBackButton}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Exes</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Exes</Text>
           </View>
 
           {exRelationshipSummaries.map((exRelationship) => (
@@ -2327,9 +2827,9 @@ function LoadedApp({
               onPress={() => setCurrentScreen("romanceExes")}
               style={styles.headerBackButton}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Ex Details</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Ex Details</Text>
           </View>
 
           <View style={styles.box}>
@@ -2342,7 +2842,7 @@ function LoadedApp({
 
           {relevantMemories.length > 0 ? (
             <View style={styles.box}>
-              <Text style={styles.fieldSectionTitle}>Memories</Text>
+              <Text variant="cardTitle" style={styles.fieldSectionTitle}>Memories</Text>
               {relevantMemories.map((memory) => (
                 <Text key={memory.id}>{memory.text}</Text>
               ))}
@@ -2362,9 +2862,9 @@ function LoadedApp({
               onPress={() => setCurrentScreen("romanceExes")}
               style={styles.headerBackButton}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Ex Details</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Ex Details</Text>
           </View>
 
           <View style={styles.box}>
@@ -2384,9 +2884,9 @@ function LoadedApp({
               onPress={goToRomancePartnerPage}
               style={styles.headerBackButton}
             >
-              <Text>Back</Text>
+              <Text variant="buttonText">Back</Text>
             </Pressable>
-            <Text style={styles.screenTitle}>Proposal</Text>
+            <Text variant="screenTitle" style={styles.screenTitle}>Proposal</Text>
           </View>
 
           <SectionCard>
@@ -2408,7 +2908,7 @@ function LoadedApp({
             <>
               <SectionCard>
                 <View style={styles.detailGroup}>
-                  <Text style={styles.sectionTitle}>Ring</Text>
+                  <Text variant="sectionTitle" style={styles.sectionTitle}>Ring</Text>
                   {PROPOSAL_RING_OPTIONS.map((option) => {
                     const affordable =
                       option.costGBP === 0 ||
@@ -2444,7 +2944,7 @@ function LoadedApp({
 
               <SectionCard>
                 <View style={styles.detailGroup}>
-                  <Text style={styles.sectionTitle}>Location</Text>
+                  <Text variant="sectionTitle" style={styles.sectionTitle}>Location</Text>
                   {PROPOSAL_LOCATION_OPTIONS.map((option) => (
                     <Pressable
                       key={option.value}
@@ -2469,7 +2969,7 @@ function LoadedApp({
 
               <SectionCard>
                 <View style={styles.detailGroup}>
-                  <Text style={styles.sectionTitle}>Speech</Text>
+                  <Text variant="sectionTitle" style={styles.sectionTitle}>Speech</Text>
                   {renderProposalSlider("Romantic", proposalPlan.romanticSpeech, (value) =>
                     updateProposalSpeech("romanticSpeech", value)
                   )}
@@ -2486,14 +2986,16 @@ function LoadedApp({
                 onPress={() => setProposalConfirmationVisible(true)}
                 style={styles.box}
               >
-                <Text>Review Proposal</Text>
+                <Text variant="buttonText">Review Proposal</Text>
               </Pressable>
             </>
           ) : (
             <>
               <SectionCard>
                 <View style={styles.detailGroup}>
-                  <Text style={styles.sectionTitle}>Confirm Proposal</Text>
+                  <Text variant="sectionTitle" style={styles.sectionTitle}>
+                    Confirm Proposal
+                  </Text>
                   <Text>{`Ring: ${getProposalRingLabel(proposalPlan.ring)}`}</Text>
                   <Text>{`Location: ${getProposalLocationLabel(proposalPlan.location)}`}</Text>
                   <Text>{`Romantic: ${proposalPlan.romanticSpeech}`}</Text>
@@ -2536,6 +3038,8 @@ function LoadedApp({
         styles={styles}
         playerName={currentCharacter.firstName}
         playerAge={currentCharacterAge}
+        playerGender={currentCharacter.gender}
+        playerRace={currentCharacter.race}
         occupation={currentDatingAppOccupation}
         country={household.country}
         isSetupFlow={isDatingSetupFlow}
@@ -3205,7 +3709,7 @@ function LoadedApp({
     setSelectedDatingMatchId(null);
   };
 
-  const spendTimeWithPartner = () => {
+  function spendTimeWithPartner() {
     const result = runSpendTimeWithPartnerAction(latestHouseholdRef.current);
     if (!result.success) {
       Alert.alert(
@@ -3221,9 +3725,9 @@ function LoadedApp({
       setHousehold,
     });
     Alert.alert("Romance", result.message);
-  };
+  }
 
-  const goOnDateWithPartner = (category: PartnerDateCategory) => {
+  function goOnDateWithPartner(category: PartnerDateCategory) {
     const result = runPartnerDateAction(latestHouseholdRef.current, category);
     if (!result.success) {
       Alert.alert(
@@ -3242,12 +3746,12 @@ function LoadedApp({
       setGoOnDateVisible(false);
     }
     Alert.alert("Go on a Date", result.message);
-  };
+  }
 
-  const haveConversationWithPartner = (
+  function haveConversationWithPartner(
     topic: PartnerConversationTopic,
     boundaryTopic?: PartnerBoundaryConversationTopic
-  ) => {
+  ) {
     const result = runPartnerConversationAction(
       latestHouseholdRef.current,
       topic,
@@ -3273,11 +3777,11 @@ function LoadedApp({
       setBoundaryConversationVisible(false);
     }
     Alert.alert("Romance", result.message);
-  };
+  }
 
-  const showWipAlert = (title: string) => {
+  function showWipAlert(title: string) {
     Alert.alert(title, "TBC");
-  };
+  }
 
   function updateProposalSpeech(
     key: keyof Pick<ProposalPlan, "romanticSpeech" | "funnySpeech" | "simpleSpeech">,
@@ -3381,7 +3885,7 @@ function LoadedApp({
     }
   }
 
-  const askPartnerForSpaceAction = () => {
+  function askPartnerForSpaceAction() {
     const result = runAskPartnerForSpaceAction(latestHouseholdRef.current);
     if (!result.success) {
       Alert.alert(
@@ -3396,9 +3900,9 @@ function LoadedApp({
       latestHouseholdRef,
       setHousehold,
     });
-  };
+  }
 
-  const bickerWithPartnerAction = () => {
+  function bickerWithPartnerAction() {
     const result = runBickerWithPartnerAction(latestHouseholdRef.current);
     if (!result.success) {
       Alert.alert(
@@ -3413,9 +3917,9 @@ function LoadedApp({
       latestHouseholdRef,
       setHousehold,
     });
-  };
+  }
 
-  const breakUpOrDivorceCurrentPartner = () => {
+  function breakUpOrDivorceCurrentPartner() {
     const result = runBreakUpOrDivorceAction(latestHouseholdRef.current);
     if (!result.success) {
       Alert.alert(
@@ -3430,9 +3934,9 @@ function LoadedApp({
       latestHouseholdRef,
       setHousehold,
     });
-  };
+  }
 
-  const confrontCurrentPartnerAboutIssue = () => {
+  function confrontCurrentPartnerAboutIssue() {
     const result = runConfrontPartnerAboutCurrentIssueAction(
       latestHouseholdRef.current,
       availableConflictIssues[0]?.id ?? null
@@ -3451,64 +3955,1412 @@ function LoadedApp({
       setHousehold,
     });
     Alert.alert("Romance", result.message);
+  }
+
+  const openCategoryScreen = (screen: AppScreen) => {
+    closeAllPanels();
+    setCurrentScreen(screen);
   };
 
-  const partnerActionHandlers = buildLoadedAppPartnerActionHandlers({
-    togglePartnerActions: () => setPartnerActionsVisible((value) => !value),
-    spendTimeWithPartner,
-    toggleGoOnDateMenu: () => setGoOnDateVisible((value) => !value),
-    goOnDateWithPartner,
-    toggleConversationMenu: () => setConversationVisible((value) => !value),
-    haveConversationWithPartner,
-    toggleBoundaryConversationMenu: () =>
-      setBoundaryConversationVisible((value) => !value),
-    toggleMajorDecisionsMenu: () => setMajorDecisionsVisible((value) => !value),
-    openProposalPlanning,
-    moveInTogether: () => showWipAlert("Move in Together"),
-    tryForBaby: () => showWipAlert("Try for a Baby"),
-    purchasePropertyTogether: () => showWipAlert("Purchase a Property Together"),
-    planWedding: () => showWipAlert("Plan Wedding"),
-    elope: () => showWipAlert("Elope"),
-    combineFinances: () => showWipAlert("Combine Finances"),
-    separateFinances: () => showWipAlert("Separate Finances"),
-    toggleConflictMenu: () => setConflictVisible((value) => !value),
-    askPartnerForSpaceAction,
-    askPartnerToMoveOut: () => showWipAlert("Ask them to Move Out"),
-    bickerWithPartnerAction,
-    breakUpOrDivorceCurrentPartner,
-    confrontCurrentPartnerAboutIssue,
-  });
+  const renderHubHeader = (title: string) => (
+    <View style={styles.screenHeader}>
+      <Pressable onPress={goToHomeScreen} style={styles.headerBackButton}>
+        <Text variant="buttonText">Back</Text>
+      </Pressable>
+      <Text variant="screenTitle" style={styles.screenTitle}>{title}</Text>
+    </View>
+  );
+
+  const renderSubpageHeader = (title: string, backScreen: AppScreen) => (
+    <View style={styles.appScreenHeader}>
+      <Pressable
+        onPress={() => {
+          closeAllPanels();
+          setCurrentScreen(backScreen);
+        }}
+        style={styles.headerSideButton}
+      >
+        <Text variant="buttonText">Back</Text>
+      </Pressable>
+      <View style={styles.appScreenHeaderTitleWrap}>
+        <Text variant="screenTitle" style={styles.screenTitle}>{title}</Text>
+      </View>
+      <Pressable onPress={goToHomeScreen} style={styles.headerSideButton}>
+        <Text variant="buttonText">Home</Text>
+      </Pressable>
+    </View>
+  );
+
+  const renderFamilyStatsPanel = () =>
+    familyStatsVisible ? (
+      <SectionCard>
+        <View style={styles.detailGroup}>
+          <Text>{`Net worth: ${formatMoney(household.netWorthGBP, household.country)}`}</Text>
+          <Text>{`Household income: ${formatMoney(
+            household.householdIncomeGBP,
+            household.country
+          )}`}</Text>
+          <Text variant="smallText" style={styles.testingText}>{`Player household income: ${formatMoney(
+            household.householdPlayerIncomeGBP,
+            household.country
+          )}`}</Text>
+          <Text variant="smallText" style={styles.testingText}>{`Other household income: ${formatMoney(
+            household.householdOtherIncomeGBP,
+            household.country
+          )}`}</Text>
+          <Text variant="smallText" style={styles.testingText}>{`Player household net worth: ${formatMoney(
+            household.householdPlayerNetWorthGBP,
+            household.country
+          )}`}</Text>
+          <Text variant="smallText" style={styles.testingText}>{`Other household net worth: ${formatMoney(
+            household.householdOtherNetWorthGBP,
+            household.country
+          )}`}</Text>
+          <Text>{scoreText("Reputation", household.reputation)}</Text>
+        </View>
+        <Pressable
+          onPress={() => setFamilyStatsVisible(false)}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </SectionCard>
+    ) : null;
+
+  const renderFamilyPanel = () =>
+    familyVisible ? (
+      <SectionCard>
+        {familyMembers.map((character) => {
+          const relationshipLabel = getRelationshipLabel(
+            character,
+            currentCharacter,
+            household.characters
+          );
+
+          return (
+            <PersonCard
+              key={character.id}
+              expanded={selectedFamilyMemberId === character.id}
+              headerContent={
+                <RelationshipBar
+                  value={clamp(
+                    character.relationshipScores[household.currentCharacterId] ?? 0,
+                    -100,
+                    100
+                  )}
+                />
+              }
+              onPress={() =>
+                setSelectedFamilyMemberId((current) => {
+                  const nextValue = current === character.id ? null : character.id;
+                  if (nextValue !== character.id) {
+                    setSelectedFamilyEngineeringId((selected) =>
+                      selected === character.id ? null : selected
+                    );
+                  }
+                  return nextValue;
+                })
+              }
+              title={
+                relationshipLabel
+                  ? (
+                    <Text variant="cardTitle">
+                      <Text variant="cardTitle" weight="bold">
+                        {`${character.firstName} ${character.lastName}`}
+                      </Text>
+                      <Text variant="cardTitle" weight="medium">
+                        {` (${relationshipLabel})`}
+                      </Text>
+                    </Text>
+                  )
+                  : `${character.firstName} ${character.lastName}`
+              }
+            >
+              <View style={styles.detailGroup}>
+                <Pressable
+                  onPress={() =>
+                    setSelectedFamilyEngineeringId((current) =>
+                      current === character.id ? null : character.id
+                    )
+                  }
+                  style={styles.familyEngineeringButton}
+                >
+                  <Text variant="buttonText">?</Text>
+                </Pressable>
+                <Text>
+                  <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                    Age:{" "}
+                  </Text>
+                  <Text>{getPersonAge(character, household.currentYear)}</Text>
+                </Text>
+                <Text>
+                  <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                    Appearance:{" "}
+                  </Text>
+                  <Text>{formatAppearanceScore(character.appearance)}</Text>
+                </Text>
+                <Text>
+                  <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                    Intelligence:{" "}
+                  </Text>
+                  <Text>{`${character.intelligence}/100`}</Text>
+                </Text>
+                <Text>
+                  <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                    Job:{" "}
+                  </Text>
+                  <Text>{character.job}</Text>
+                </Text>
+                <Text>
+                  <Text variant="label" weight="bold" style={styles.familyInfoLabel}>
+                    Traits:{" "}
+                  </Text>
+                  <Text>{labelList(character.traits)}</Text>
+                </Text>
+                {selectedFamilyEngineeringId === character.id ? (
+                  <>
+                    <Text>{`Income: ${formatMoney(
+                      character.annualIncomeGBP,
+                      household.country
+                    )}`}</Text>
+                    <Text>{`Race: ${character.race}`}</Text>
+                  </>
+                ) : null}
+              </View>
+              <Pressable
+                onPress={() => switchLife(character.id)}
+                style={styles.innerBox}
+              >
+                <Text variant="buttonText">Switch life</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setSelectedFamilyMemberId(null);
+                  setSelectedFamilyEngineeringId(null);
+                }}
+                style={styles.innerBox}
+              >
+                <Text>Close</Text>
+              </Pressable>
+            </PersonCard>
+          );
+        })}
+        <Pressable
+          onPress={() => {
+            setSelectedFamilyMemberId(null);
+            setSelectedFamilyEngineeringId(null);
+            setFamilyVisible(false);
+          }}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </SectionCard>
+    ) : null;
+
+  const renderFriendsPanel = () =>
+    friendsVisible ? (
+      <SectionCard>
+        {currentCharacter.friends.length > 0 ? (
+          currentCharacter.friends.map((friend) => (
+            <PersonCard
+              key={friend.id}
+              expanded={selectedFriendId === friend.id}
+              onPress={() =>
+                setSelectedFriendId((current) =>
+                  current === friend.id ? null : friend.id
+                )
+              }
+              title={`${friend.firstName} ${friend.lastName}`}
+            >
+              <StatBar
+                items={[
+                  { label: "Relationship", value: friend.relationship },
+                  { label: "Compatibility", value: friend.compatibility },
+                  {
+                    label: "Appearance",
+                    value: friend.appearance,
+                    displayValue: formatAppearanceScore(friend.appearance),
+                  },
+                  { label: "Intelligence", value: friend.intelligence },
+                ]}
+              />
+              <Text>{`Age: ${friend.age}`}</Text>
+              <Text>{`Race: ${friend.race}`}</Text>
+              <Text>{`Traits: ${labelList(friend.traits)}`}</Text>
+              <Text>{`Occupation: ${friend.occupation}`}</Text>
+            </PersonCard>
+          ))
+        ) : (
+          <Text>No friends yet.</Text>
+        )}
+        <Pressable
+          onPress={() => setFriendsVisible(false)}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </SectionCard>
+    ) : null;
+
+  const renderFinancesPanel = () =>
+    financesVisible ? (
+      <View style={styles.box}>
+        <View style={styles.detailGroup}>
+          <Text>{`Annual Income: ${formatMoney(
+            currentTaxSummary.grossIncomeGBP,
+            household.country
+          )}`}</Text>
+          <Text>{`Tax Rate: ${currentTaxSummary.marginalRate}%`}</Text>
+          <Text>{`Tax Paid: ${formatMoney(
+            currentTaxSummary.taxGBP,
+            household.country
+          )}`}</Text>
+          <Text>{`Net Annual Income: ${formatMoney(
+            currentTaxSummary.netIncomeGBP,
+            household.country
+          )}`}</Text>
+        </View>
+        <Pressable
+          onPress={() => setFinancesVisible(false)}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </View>
+    ) : null;
+
+  const renderHousePanel = () =>
+    houseVisible ? (
+      <View style={styles.houseCardContainer}>
+        <View style={styles.houseCard}>
+          <View style={styles.houseCardHeader}>
+            <Text variant="cardTitle" weight="bold">
+              Current Living Situation
+            </Text>
+            <Pressable
+              onPress={() =>
+                setHouseEngineeringVisible((visible) => !visible)
+              }
+              style={styles.questionButton}
+            >
+              <Text variant="label" weight="bold">
+                ?
+              </Text>
+            </Pressable>
+          </View>
+          <View style={styles.detailGroup}>
+            <Text variant="cardTitle">Current Living Situation</Text>
+            <Text>{currentLivingSituationText}</Text>
+            {currentResidence ? (
+              <>
+                {houseEngineeringVisible ? (
+                  <>
+                    <Text>
+                      <Text
+                        variant="label"
+                        weight="bold"
+                        style={styles.familyInfoLabel}
+                      >
+                        Occupants:{" "}
+                      </Text>
+                      <Text>{houseOvercrowding.occupantCount}</Text>
+                    </Text>
+                    <Text>
+                      <Text
+                        variant="label"
+                        weight="bold"
+                        style={styles.familyInfoLabel}
+                      >
+                        Bedrooms needed:{" "}
+                      </Text>
+                      <Text>{houseOvercrowding.requiredBedrooms}</Text>
+                    </Text>
+                    <Text>
+                      <Text
+                        variant="label"
+                        weight="bold"
+                        style={styles.familyInfoLabel}
+                      >
+                        Overcrowding:{" "}
+                      </Text>
+                      <Text>{houseOvercrowding.severity}</Text>
+                    </Text>
+                  </>
+                ) : null}
+                <Text>
+                  <Text
+                    variant="label"
+                    weight="bold"
+                    style={styles.familyInfoLabel}
+                  >
+                    Bedrooms:{" "}
+                  </Text>
+                  <Text>{currentResidence.bedrooms}</Text>
+                  <Text
+                    variant="label"
+                    weight="bold"
+                    style={styles.familyInfoLabel}
+                  >
+                    , Bathrooms:{" "}
+                  </Text>
+                  <Text>{currentResidence.bathrooms}</Text>
+                </Text>
+                <Text>
+                  <Text
+                    variant="label"
+                    weight="bold"
+                    style={styles.familyInfoLabel}
+                  >
+                    Property Value:{" "}
+                  </Text>
+                  <Text>
+                    {formatMoney(currentResidence.valueGBP, household.country)}
+                  </Text>
+                </Text>
+                <Text>
+                  <Text
+                    variant="label"
+                    weight="bold"
+                    style={styles.familyInfoLabel}
+                  >
+                    Condition:{" "}
+                  </Text>
+                  <Text>
+                    {PROPERTY_CONDITION_LABELS[currentResidence.condition]}
+                  </Text>
+                </Text>
+                <Text>
+                  <Text
+                    variant="label"
+                    weight="bold"
+                    style={styles.familyInfoLabel}
+                  >
+                    Neighbourhood:{" "}
+                  </Text>
+                  <Text>
+                    {
+                      NEIGHBOURHOOD_QUALITY_LABELS[
+                        currentResidence.neighbourhoodQuality
+                      ]
+                    }
+                  </Text>
+                </Text>
+                {currentResidence.propertyUse === "rental" ? (
+                  <Text>Held as a Rental Property</Text>
+                ) : null}
+              </>
+            ) : null}
+          </View>
+          {currentCharacter.livingSituation.type === "family_home" ? (
+            <Pressable onPress={handleMoveOut} style={styles.innerBox}>
+              <Text variant="buttonText">Move Out</Text>
+            </Pressable>
+          ) : null}
+          {currentCharacter.livingSituation.type === "homeless" ? (
+            <>
+              <Pressable onPress={handleMoveBackHome} style={styles.innerBox}>
+                <Text variant="buttonText">Move Back Home</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setStayWithFriendVisible((current) => !current)}
+                style={styles.innerBox}
+              >
+                <Text variant="buttonText">Stay with a Friend</Text>
+              </Pressable>
+              {stayWithFriendVisible ? (
+                <View style={styles.detailBox}>
+                  {eligibleFriendHosts.length > 0 ? (
+                    eligibleFriendHosts.map((host) => (
+                      <Pressable
+                        key={host.hostId}
+                        onPress={() => handleStayWithHost(host.hostId)}
+                        style={styles.innerBox}
+                      >
+                        <Text>{host.hostName}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text>No eligible friends right now.</Text>
+                  )}
+                </View>
+              ) : null}
+              <Pressable
+                onPress={() => setStayWithSiblingVisible((current) => !current)}
+                style={styles.innerBox}
+              >
+                <Text variant="buttonText">Stay with a Sibling</Text>
+              </Pressable>
+              {stayWithSiblingVisible ? (
+                <View style={styles.detailBox}>
+                  {eligibleSiblingHosts.length > 0 ? (
+                    eligibleSiblingHosts.map((host) => (
+                      <Pressable
+                        key={host.hostId}
+                        onPress={() => handleStayWithHost(host.hostId)}
+                        style={styles.innerBox}
+                      >
+                        <Text>{host.hostName}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text>No eligible siblings right now.</Text>
+                  )}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+          {currentCharacter.livingSituation.type === "staying_with_person" ? (
+            <>
+              <Pressable onPress={handleLeaveCurrentStay} style={styles.innerBox}>
+                <Text variant="buttonText">Leave</Text>
+              </Pressable>
+              <Pressable onPress={handleMoveBackHome} style={styles.innerBox}>
+                <Text variant="buttonText">Move Back Home</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setStayWithFriendVisible((current) => !current)}
+                style={styles.innerBox}
+              >
+                <Text variant="buttonText">Stay with a Friend</Text>
+              </Pressable>
+              {stayWithFriendVisible ? (
+                <View style={styles.detailBox}>
+                  {eligibleFriendHosts.length > 0 ? (
+                    eligibleFriendHosts.map((host) => (
+                      <Pressable
+                        key={host.hostId}
+                        onPress={() => handleStayWithHost(host.hostId)}
+                        style={styles.innerBox}
+                      >
+                        <Text>{host.hostName}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text>No eligible friends right now.</Text>
+                  )}
+                </View>
+              ) : null}
+              <Pressable
+                onPress={() => setStayWithSiblingVisible((current) => !current)}
+                style={styles.innerBox}
+              >
+                <Text variant="buttonText">Stay with a Sibling</Text>
+              </Pressable>
+              {stayWithSiblingVisible ? (
+                <View style={styles.detailBox}>
+                  {eligibleSiblingHosts.length > 0 ? (
+                    eligibleSiblingHosts.map((host) => (
+                      <Pressable
+                        key={host.hostId}
+                        onPress={() => handleStayWithHost(host.hostId)}
+                        style={styles.innerBox}
+                      >
+                        <Text>{host.hostName}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <Text>No eligible siblings right now.</Text>
+                  )}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+          <Pressable
+            onPress={() => setHouseResidentsVisible((value) => !value)}
+            style={styles.innerBox}
+          >
+            <Text variant="buttonText">Residents</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setHouseResidentsVisible(false);
+              setHouseEngineeringVisible(false);
+              setHouseVisible(false);
+            }}
+            style={styles.innerBox}
+          >
+            <Text variant="buttonText">Close</Text>
+          </Pressable>
+        </View>
+        {houseResidentsVisible ? (
+          <View style={styles.houseDetailBox}>
+            <Text variant="cardTitle">Residents</Text>
+            {houseResidents.map((character) => {
+              const relationshipLabel = getRelationshipLabel(
+                character,
+                currentCharacter,
+                household.characters
+              );
+
+              return (
+                <Text key={character.id}>
+                  {relationshipLabel
+                    ? `${character.firstName} ${character.lastName} (${relationshipLabel})`
+                    : `${character.firstName} ${character.lastName}`}
+                </Text>
+              );
+            })}
+            <Pressable
+              onPress={() => setHouseResidentsVisible(false)}
+              style={styles.innerBox}
+            >
+              <Text variant="buttonText">Close</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {houseEngineeringVisible ? (
+          <View style={styles.houseDetailBox}>
+            <Text variant="cardTitle">Owned by</Text>
+            {currentResidence && currentResidence.ownerIds.length > 0 ? (
+              currentResidence.ownerIds.map((ownerId) => {
+                const owner =
+                  household.characters.find((character) => character.id === ownerId) ?? null;
+
+                if (!owner) {
+                  return null;
+                }
+
+                return (
+                  <Text key={owner.id}>
+                    {owner.firstName} {owner.lastName} -{" "}
+                    {getCharacterOwnershipShare(currentResidence, owner.id)}%
+                  </Text>
+                );
+              })
+            ) : (
+              <Text>No owners recorded.</Text>
+            )}
+            <Text variant="cardTitle">Owned Properties</Text>
+            {ownedProperties.length > 0 ? (
+              ownedProperties.map((property) => {
+                const propertyMortgage =
+                  property.mortgageId
+                    ? household.propertyMortgages.find(
+                        (mortgage) => mortgage.id === property.mortgageId
+                      ) ?? null
+                    : null;
+                const playerLivesHere = currentResidence?.id === property.id;
+
+                return (
+                  <View key={property.id} style={styles.innerBox}>
+                    <Text>{formatMoney(property.valueGBP, household.country)}</Text>
+                    <Text>{`${property.bedrooms} bedrooms`}</Text>
+                    <Text>{`${property.bathrooms} bathrooms`}</Text>
+                    <Text>{`Condition: ${PROPERTY_CONDITION_LABELS[property.condition]}`}</Text>
+                    <Text>
+                      {`Neighbourhood: ${NEIGHBOURHOOD_QUALITY_LABELS[property.neighbourhoodQuality]}`}
+                    </Text>
+                    <Text>
+                      {`Your ownership: ${getCharacterOwnershipShare(property, currentCharacter.id)}%`}
+                    </Text>
+                    <Text>
+                      {`Your equity: ${formatMoney(
+                        Math.round(
+                          (getPropertyEquityGBP(property, household.propertyMortgages) *
+                            getCharacterOwnershipShare(property, currentCharacter.id)) /
+                            100
+                        ),
+                        household.country
+                      )}`}
+                    </Text>
+                    {propertyMortgage ? (
+                      <>
+                        <Text>
+                          {`Mortgage balance: ${formatMoney(
+                            propertyMortgage.outstandingPrincipalGBP,
+                            household.country
+                          )}`}
+                        </Text>
+                        <Text>
+                          {`Annual repayment: ${formatMoney(
+                            propertyMortgage.annualRepaymentGBP,
+                            household.country
+                          )}`}
+                        </Text>
+                        <Text>{`Years remaining: ${propertyMortgage.yearsRemaining}`}</Text>
+                      </>
+                    ) : (
+                      <Text>No mortgage</Text>
+                    )}
+                    {property.propertyUse === "rental" ? (
+                      <Text>Held as a Rental Property</Text>
+                    ) : null}
+                    {playerLivesHere ? <Text>You currently live here.</Text> : null}
+                    {!playerLivesHere ? (
+                      <Pressable
+                        onPress={() =>
+                          commitHouseholdWithFinance(
+                            applyPurchasedPropertyDecision({
+                              household: latestHouseholdRef.current,
+                              propertyId: property.id,
+                              buyerId: latestHouseholdRef.current.currentCharacterId,
+                              coBuyerId: null,
+                              action: "live_here",
+                            })
+                          )
+                        }
+                        style={styles.innerBox}
+                      >
+                        <Text variant="buttonText">Live Here</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                );
+              })
+            ) : (
+              <Text>You do not currently own any properties.</Text>
+            )}
+            {postPurchaseDecision ? (
+              <View style={styles.detailBox}>
+                <Text variant="cardTitle">What would you like to do with this property?</Text>
+                <Pressable
+                  onPress={() => handlePropertyDecision("live_here")}
+                  style={styles.innerBox}
+                >
+                  <Text>Live Here</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => handlePropertyDecision("rent_out")}
+                  style={styles.innerBox}
+                >
+                  <Text>Rent Out</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    ) : null;
+
+  const renderPropertyListingCards = (
+    listings: typeof normalListings,
+    emptyMessage: string
+  ) =>
+    listings.length > 0 ? (
+      listings.map((listing) => {
+        const depositGBP = getMinimumMortgageDepositGBP(listing.valueGBP);
+        const annualRepaymentGBP = calculateAnnualMortgageRepaymentGBP(
+          listing.valueGBP - depositGBP
+        );
+
+        return (
+          <View key={listing.id} style={styles.propertyListingCard}>
+            <View style={styles.propertyListingPlaceholder} />
+            <Text>{formatMoney(listing.valueGBP, household.country)}</Text>
+            <Text>{`${listing.bedrooms} bedrooms`}</Text>
+            <Text>{`${listing.bathrooms} bathrooms`}</Text>
+            <Text>{`Condition: ${PROPERTY_CONDITION_LABELS[listing.condition]}`}</Text>
+            <Text>{`Neighbourhood Quality: ${listing.neighbourhoodQuality}/100`}</Text>
+            <Pressable
+              onPress={() => {
+                if (currentCharacterAge < 18) {
+                  Alert.alert("Housing", "You must be 18 to purchase a property.");
+                  return;
+                }
+
+                setSelectedPropertyListingId((current) =>
+                  current === listing.id ? null : listing.id
+                );
+                setPurchaseWithSomeoneVisible(false);
+                setPendingPurchaseCoBuyerId(null);
+              }}
+              style={styles.innerBox}
+            >
+              <Text>Purchase</Text>
+            </Pressable>
+            {selectedPropertyListingId === listing.id ? (
+              <View style={styles.detailBox}>
+                <Text>Who would you like to purchase this property with?</Text>
+                <Pressable
+                  onPress={() => {
+                    setPurchaseWithSomeoneVisible(false);
+                    setPendingPurchaseCoBuyerId(null);
+                  }}
+                  style={styles.innerBox}
+                >
+                  <Text>Purchase Alone</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setPurchaseWithSomeoneVisible((current) => !current)}
+                  style={styles.innerBox}
+                >
+                  <Text>Purchase With Someone</Text>
+                </Pressable>
+                {purchaseWithSomeoneVisible ? (
+                  <View style={styles.detailBox}>
+                    {eligibleCoBuyers.length > 0 ? (
+                      eligibleCoBuyers.map((coBuyer) => (
+                        <Pressable
+                          key={coBuyer.personId}
+                          onPress={() => setPendingPurchaseCoBuyerId(coBuyer.personId)}
+                          style={styles.innerBox}
+                        >
+                          <Text>{`${coBuyer.name} (${coBuyer.relationshipType})`}</Text>
+                        </Pressable>
+                      ))
+                    ) : (
+                      <Text>No eligible co-purchasers right now.</Text>
+                    )}
+                  </View>
+                ) : null}
+                <Text>How would you like to purchase this property?</Text>
+                <Pressable
+                  onPress={() =>
+                    completePropertyPurchase(listing.id, "cash", pendingPurchaseCoBuyerId)
+                  }
+                  style={styles.innerBox}
+                >
+                  <Text>{`Buy with Cash\n${formatMoney(listing.valueGBP, household.country)}`}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() =>
+                    completePropertyPurchase(
+                      listing.id,
+                      "mortgage",
+                      pendingPurchaseCoBuyerId
+                    )
+                  }
+                  style={styles.innerBox}
+                >
+                  <Text>{`Buy with a Mortgage\n${formatMoney(depositGBP, household.country)} deposit`}</Text>
+                </Pressable>
+                <Text>{`Property value: ${formatMoney(listing.valueGBP, household.country)}`}</Text>
+                <Text>{`Deposit: ${formatMoney(depositGBP, household.country)}`}</Text>
+                <Text>
+                  {`Mortgage loan: ${formatMoney(
+                    listing.valueGBP - depositGBP,
+                    household.country
+                  )}`}
+                </Text>
+                <Text>{`Interest rate: ${Math.round(MORTGAGE_ANNUAL_INTEREST_RATE * 100)}%`}</Text>
+                <Text>{`Mortgage term: ${MORTGAGE_TERM_YEARS} years`}</Text>
+                <Text>
+                  {`Annual repayment: ${formatMoney(
+                    annualRepaymentGBP,
+                    household.country
+                  )}`}
+                </Text>
+                {(pendingPurchaseCoBuyerId || purchaseWithSomeoneVisible) ? (
+                  <Text>
+                    {`Your annual share: ${formatMoney(
+                      Math.round(annualRepaymentGBP / 2),
+                      household.country
+                    )}`}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        );
+      })
+    ) : (
+      <View style={styles.box}>
+        <Text>{emptyMessage}</Text>
+      </View>
+    );
+
+  const renderActivitiesPanel = () =>
+    activitiesVisible ? (
+      <View style={styles.box}>
+        {ACTIVITY_DEFINITIONS.map((activity) => {
+          const isSelected = selectedActivityName === activity.name;
+          const isJoined = currentCharacter.joinedClubs.includes(activity.name);
+
+          return (
+            <View key={activity.name} style={styles.familyItem}>
+              <Pressable
+                onPress={() =>
+                  setSelectedActivityName((current) =>
+                    current === activity.name ? null : activity.name
+                  )
+                }
+                style={styles.innerBox}
+              >
+                <Text>{activity.name}</Text>
+              </Pressable>
+
+              {isSelected ? (
+                <View style={styles.detailBox}>
+                  <Pressable
+                    onPress={() =>
+                      isJoined
+                        ? leaveActivityClub(activity.name)
+                        : joinActivityClub(activity.name)
+                    }
+                    style={styles.innerBox}
+                  >
+                    <Text>{isJoined ? "Leave club" : "Join club"}</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+        <Pressable
+          onPress={() => {
+            setSelectedActivityName(null);
+            setActivitiesVisible(false);
+          }}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </View>
+    ) : null;
+
+  const renderDiaryPanel = () =>
+    diaryVisible ? (
+      <View style={styles.box}>
+        {currentDiaryEntries.length > 0 ? (
+          currentDiaryEntries.map((entry) => (
+            <View key={entry.id} style={styles.innerBox}>
+              <Text>{entry.year}</Text>
+              <Text>{entry.text}</Text>
+            </View>
+          ))
+        ) : (
+          <View style={styles.innerBox}>
+            <Text>No diary entries yet.</Text>
+          </View>
+        )}
+        <Pressable
+          onPress={() => setDiaryVisible(false)}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </View>
+    ) : null;
+
+  const renderMemoriesPanel = () =>
+    memoriesVisible ? (
+      <View style={styles.box}>
+        {currentCharacter.memories.map((memory) => (
+          <View key={memory.id} style={styles.innerBox}>
+            <Text>{memory.text}</Text>
+          </View>
+        ))}
+        <Pressable
+          onPress={() => setMemoriesVisible(false)}
+          style={styles.innerBox}
+        >
+          <Text>Close</Text>
+        </Pressable>
+      </View>
+    ) : null;
+
+  if (currentScreen === "relationshipsHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Relationships")}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(familyVisible, setFamilyVisible)}
+            style={styles.box}
+          >
+            <Text>Family Relationships</Text>
+          </Pressable>
+          {renderFamilyPanel()}
+
+          <Pressable
+            onPress={() => {
+              closeAllPanels();
+              setCurrentScreen("romance");
+            }}
+            style={styles.box}
+          >
+            <Text>Romantic Relationships</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(friendsVisible, setFriendsVisible)}
+            style={styles.box}
+          >
+            <Text>Friendships</Text>
+          </Pressable>
+          {renderFriendsPanel()}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "assetsHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Assets")}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(houseVisible, setHouseVisible)}
+            style={styles.assetsHousingButton}
+          >
+            <Text variant="buttonText" weight="bold">
+              Housing
+            </Text>
+          </Pressable>
+          {renderHousePanel()}
+
+          <Pressable
+            onPress={() => {
+              closeAllPanels();
+              setCurrentScreen("browsePropertiesHub");
+            }}
+            style={styles.assetsBrowsePropertiesButton}
+          >
+            <Text variant="buttonText" weight="bold">
+              Browse Properties
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(financesVisible, setFinancesVisible)}
+            style={styles.box}
+          >
+            <Text>Finances</Text>
+          </Pressable>
+          {renderFinancesPanel()}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "browsePropertiesHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderSubpageHeader("Browse Properties", "assetsHub")}
+
+          <Pressable
+            onPress={() => setBrowsePurchaseOptionsVisible((current) => !current)}
+            style={styles.browseActionCard}
+          >
+            <Text variant="buttonText" weight="bold">
+              Purchase a Property
+            </Text>
+          </Pressable>
+          {browsePurchaseOptionsVisible ? (
+            <View style={styles.detailBox}>
+              <Pressable
+                onPress={() => {
+                  setSelectedBrowseRealtorTier("luxury");
+                  setSelectedPropertyListingId(null);
+                  setPurchaseWithSomeoneVisible(false);
+                  setPendingPurchaseCoBuyerId(null);
+                  setCurrentScreen("propertyRealtorListings");
+                }}
+                style={styles.innerBox}
+              >
+                <Text>Luxury Realtor</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setSelectedBrowseRealtorTier("normal");
+                  setSelectedPropertyListingId(null);
+                  setPurchaseWithSomeoneVisible(false);
+                  setPendingPurchaseCoBuyerId(null);
+                  setCurrentScreen("propertyRealtorListings");
+                }}
+                style={styles.innerBox}
+              >
+                <Text>Normal Realtor</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <Pressable
+            onPress={() => Alert.alert("Housing", "Rent a Property - TBC")}
+            style={styles.browseActionCard}
+          >
+            <Text variant="buttonText" weight="bold" style={styles.tbcActionText}>
+              Rent a Property - TBC
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "propertyRealtorListings") {
+    const isLuxuryRealtor = selectedBrowseRealtorTier === "luxury";
+    const realtorTitle = isLuxuryRealtor ? "Luxury Realtor" : "Normal Realtor";
+    const realtorListings = isLuxuryRealtor ? luxuryListings : normalListings;
+
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderSubpageHeader(realtorTitle, "browsePropertiesHub")}
+          {renderPropertyListingCards(
+            realtorListings,
+            `No ${realtorTitle.toLowerCase()} properties available right now.`
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "educationCareerHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Education / Career")}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(educationVisible, setEducationVisible)}
+            style={styles.box}
+          >
+            <Text>Education</Text>
+          </Pressable>
+
+          <EducationPanel
+            classroomVisible={classroomVisible}
+            classmates={classmates}
+            country={household.country}
+            currentAcademicPerformance={currentAcademicPerformance}
+            currentCharacter={currentCharacter}
+            currentEducationStatus={currentEducationStatus}
+            degreeOptionsVisible={degreeOptionsVisible}
+            educationVisible={educationVisible}
+            onAddClassmateAsFriend={addClassmateAsFriend}
+            onChooseUniversityDegree={chooseUniversityDegree}
+            onClose={() => setEducationVisible(false)}
+            onCloseDegreeOptions={() => setDegreeOptionsVisible(false)}
+            onOpenClassroom={openClassroom}
+            onStudy={studyHarder}
+            onToggleDegreeOptions={() =>
+              setDegreeOptionsVisible((current) => !current)
+            }
+            onToggleSelectedClassmate={(classmateId) =>
+              setSelectedClassmateId((current) =>
+                current === classmateId ? null : classmateId
+              )
+            }
+            selectedClassmateId={selectedClassmateId}
+            shouldShowAcademicPerformance={shouldShowAcademicPerformance}
+          />
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(jobsVisible, setJobsVisible)}
+            style={styles.box}
+          >
+            <Text>Career</Text>
+          </Pressable>
+
+          <CareerPanel
+            country={household.country}
+            currentCVScore={currentCVScore}
+            currentCharacter={currentCharacter}
+            cvInfoVisible={cvInfoVisible}
+            fullTimeJobsVisible={fullTimeJobsVisible}
+            jobsVisible={jobsVisible}
+            lookForJobsVisible={lookForJobsVisible}
+            onApplyForFullTimeJob={applyForFullTimeJob}
+            onApplyForPartTimeJob={applyForPartTimeJob}
+            onChoosePartTimeHoursBand={choosePartTimeHoursBand}
+            onClose={() => setJobsVisible(false)}
+            onQuitFullTimeJob={quitFullTimeJob}
+            onQuitPartTimeJob={quitPartTimeJob}
+            onRefreshJobListings={refreshJobListings}
+            onToggleCvInfoVisible={() => setCvInfoVisible((value) => !value)}
+            onToggleFullTimeJobsVisible={() =>
+              setFullTimeJobsVisible((value) => !value)
+            }
+            onToggleLookForJobsVisible={() =>
+              setLookForJobsVisible((value) => !value)
+            }
+            onTogglePartTimeJobsVisible={() =>
+              setPartTimeJobsVisible((value) => !value)
+            }
+            partTimeJobsVisible={partTimeJobsVisible}
+            selectedPartTimeHoursBand={selectedPartTimeHoursBand}
+          />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "activitiesHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Activities")}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(activitiesVisible, setActivitiesVisible)}
+            style={styles.box}
+          >
+            <Text>Activities</Text>
+          </Pressable>
+          {renderActivitiesPanel()}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "dynastyHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Dynasty")}
+
+          <Pressable
+            onPress={() =>
+              toggleTopLevelPanel(familyStatsVisible, setFamilyStatsVisible)
+            }
+            style={styles.box}
+          >
+            <Text>{`${household.familyLastName} Family Statistics`}</Text>
+          </Pressable>
+          {renderFamilyStatsPanel()}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(diaryVisible, setDiaryVisible)}
+            style={styles.box}
+          >
+            <Text>Diary</Text>
+          </Pressable>
+          {renderDiaryPanel()}
+
+          <Pressable
+            onPress={() => toggleTopLevelPanel(memoriesVisible, setMemoriesVisible)}
+            style={styles.box}
+          >
+            <Text>Memories</Text>
+          </Pressable>
+          {renderMemoriesPanel()}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (currentScreen === "settingsHub") {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView contentContainerStyle={styles.container}>
+          {renderHubHeader("Settings")}
+
+          <Pressable
+            onPress={() => {
+              void refreshManualLifeSlots();
+              setCurrentScreen("saveLife");
+            }}
+            style={styles.box}
+          >
+            <Text>Save Life</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
-        <CharacterHeader
-          headerLabel={`${currentCharacter.firstName} ${currentCharacter.lastName} (you)`}
-          sectionLabel="Player"
-          summary={`Age: ${currentCharacterAge}  Year: ${household.currentYear}  Country: ${household.country}  Bank Account: ${formatMoney(
-            currentCharacter.bankBalanceGBP,
-            household.country
-          )}`}
-          onPress={() =>
-            toggleTopLevelPanel(playerDetailsVisible, setPlayerDetailsVisible)
-          }
-        />
+        <View style={styles.topBar}>
+          <Pressable
+            onPress={() =>
+              toggleTopLevelPanel(playerDetailsVisible, setPlayerDetailsVisible)
+            }
+            style={[
+              styles.profileButton,
+              playerDetailsVisible ? styles.profileButtonExpanded : null,
+            ]}
+          >
+            <View style={styles.profileButtonContent}>
+              <View style={styles.playerProfilePhotoFrame}>
+                {playerProfilePhotoSource ? (
+                  <Image
+                    source={playerProfilePhotoSource}
+                    style={styles.playerProfilePhoto}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.playerProfilePhotoPlaceholder} />
+                )}
+              </View>
+              <View style={styles.profileButtonNameGroup}>
+                {playerDisplayNameLines.map((line) => (
+                  <Text
+                    key={line}
+                    variant="screenTitle"
+                    weight="extrabold"
+                    style={styles.profileButtonTitle}
+                  >
+                    {line}
+                  </Text>
+                ))}
+              </View>
+            </View>
+          </Pressable>
+
+          <View style={styles.ageYearBox}>
+            <View style={styles.ageYearSeasonGroup}>
+              <Image
+                source={SEASON_ICON}
+                style={styles.ageYearSeasonIcon}
+                resizeMode="contain"
+              />
+              <Text
+                variant="label"
+                weight="semibold"
+                style={styles.ageYearSeasonText}
+              >
+                July
+              </Text>
+            </View>
+            <View style={styles.ageYearInfoGroup}>
+              <Text variant="label" weight="bold" style={styles.ageYearAgeText}>
+                {`Age ${currentCharacterAge}`}
+              </Text>
+              <Text variant="label" weight="bold" style={styles.ageYearText}>
+                {household.currentYear}
+              </Text>
+            </View>
+          </View>
+        </View>
 
         {playerDetailsVisible ? (
-          <SectionCard>
+          <SectionCard style={styles.playerDetailsCard}>
             <View style={styles.detailGroup}>
-              <StatBar
-                items={[
-                  { label: "Mood", value: currentCharacter.mood },
-                  { label: "Health", value: currentCharacter.health },
-                  { label: "Appearance", value: currentCharacter.appearance },
-                  { label: "Intelligence", value: currentCharacter.intelligence },
-                ]}
-              />
-              <Text>{`Race: ${currentCharacter.race}`}</Text>
-              <Text>{`Traits: ${labelList(currentCharacter.traits)}`}</Text>
-              <Text>{`Strengths: ${labelList(currentCharacter.strengths)}`}</Text>
-              <Text>{`Weaknesses: ${labelList(currentCharacter.weaknesses)}`}</Text>
+              {playerProfileEngineeringVisible ? (
+                <View style={styles.detailGroup}>
+                  <View style={styles.profileDetailHeader}>
+                    <Text variant="cardTitle">Player Profile</Text>
+                    <View style={styles.profileHeaderActions}>
+                      <Pressable
+                        onPress={() =>
+                          setPlayerProfileEngineeringVisible((current) => !current)
+                        }
+                        style={styles.questionButton}
+                      >
+                        <Text variant="buttonText">?</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          setPlayerProfileEngineeringVisible(false);
+                          setPlayerDetailsVisible(false);
+                        }}
+                        style={styles.questionButton}
+                      >
+                        <Text variant="buttonText">X</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Text>{`Mood: ${effectiveMood}/100`}</Text>
+                  <Text>{`Health: ${currentCharacter.health}/100`}</Text>
+                  <Text>{`Appearance: ${currentCharacter.appearance}/100`}</Text>
+                  <Text>{`Race: ${currentCharacter.race}`}</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.profileDetailHeader}>
+                    <Text style={styles.profileStatLine}>
+                      <Text variant="label" weight="semibold" style={styles.profileInfoLabel}>
+                        Mood:{" "}
+                      </Text>
+                      <Text
+                        variant="value"
+                        weight="medium"
+                        style={styles.profileInfoValue}
+                      >
+                        {formatMoodText(effectiveMood)}
+                      </Text>
+                    </Text>
+                    <View style={styles.profileHeaderActions}>
+                      <Pressable
+                        onPress={() =>
+                          setPlayerProfileEngineeringVisible((current) => !current)
+                        }
+                        style={styles.questionButton}
+                      >
+                        <Text variant="buttonText">?</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          setPlayerProfileEngineeringVisible(false);
+                          setPlayerDetailsVisible(false);
+                        }}
+                        style={styles.questionButton}
+                      >
+                        <Text variant="buttonText">X</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Text>
+                    <Text variant="label" weight="semibold" style={styles.profileInfoLabel}>
+                      Health:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="medium"
+                      style={styles.profileInfoValue}
+                    >
+                      {formatHealthText(currentCharacter.health)}
+                    </Text>
+                  </Text>
+                  <Text>
+                    <Text variant="label" weight="semibold" style={styles.profileInfoLabel}>
+                      Appearance:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="medium"
+                      style={styles.profileInfoValue}
+                    >
+                      {formatAppearanceScore(currentCharacter.appearance)}
+                    </Text>
+                  </Text>
+                  <Text>
+                    <Text variant="label" weight="semibold" style={styles.profileInfoLabel}>
+                      Intelligence:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="medium"
+                      style={styles.profileInfoValue}
+                    >
+                      {`${currentCharacter.intelligence}/100`}
+                    </Text>
+                  </Text>
+                  <Text>
+                    <Text variant="label" weight="bold" style={styles.profileInfoLabel}>
+                      Traits:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="semibold"
+                      style={styles.profileInfoValue}
+                    >
+                      {labelList(currentCharacter.traits)}
+                    </Text>
+                  </Text>
+                  <Text>
+                    <Text variant="label" weight="bold" style={styles.profileInfoLabel}>
+                      Strengths:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="semibold"
+                      style={styles.profileInfoValue}
+                    >
+                      {labelList(currentCharacter.strengths)}
+                    </Text>
+                  </Text>
+                  <Text>
+                    <Text variant="label" weight="bold" style={styles.profileInfoLabel}>
+                      Weaknesses:{" "}
+                    </Text>
+                    <Text
+                      variant="value"
+                      weight="semibold"
+                      style={styles.profileInfoValue}
+                    >
+                      {labelList(currentCharacter.weaknesses)}
+                    </Text>
+                  </Text>
+                </>
+              )}
               <Pressable
                 onPress={() =>
                   updateCurrentCharacter((character) => ({
@@ -3525,492 +5377,63 @@ function LoadedApp({
                 <Text>{`Gender Preference: ${currentCharacter.genderPreference}`}</Text>
               </Pressable>
             </View>
-            <Pressable
-              onPress={() => setPlayerDetailsVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
           </SectionCard>
         ) : null}
 
-        <Pressable
-          onPress={() => {
-            void refreshManualLifeSlots();
-            setCurrentScreen("saveLife");
-          }}
-          style={styles.box}
-        >
-          <Text>Save Life</Text>
-        </Pressable>
-        <Pressable
-          onPress={() =>
-            toggleTopLevelPanel(familyStatsVisible, setFamilyStatsVisible)
-          }
-          style={styles.box}
-        >
-          <Text>{`${household.familyLastName} Family Statistics`}</Text>
-        </Pressable>
+        <View style={styles.metaRow}>
+          <Text>{`Country: ${household.country}`}</Text>
+          <Text>{`Bank Account: ${formatMoney(
+            currentCharacter.bankBalanceGBP,
+            household.country
+          )}`}</Text>
+        </View>
 
-        {familyStatsVisible ? (
-          <SectionCard>
-            <View style={styles.detailGroup}>
-              <Text>{`Net worth: ${formatMoney(household.netWorthGBP, household.country)}`}</Text>
-              <Text>{`Household income: ${formatMoney(
-                household.householdIncomeGBP,
-                household.country
-              )}`}</Text>
-              <Text style={styles.testingText}>{`Player household income: ${formatMoney(
-                household.householdPlayerIncomeGBP,
-                household.country
-              )}`}</Text>
-              <Text style={styles.testingText}>{`Other household income: ${formatMoney(
-                household.householdOtherIncomeGBP,
-                household.country
-              )}`}</Text>
-              <Text style={styles.testingText}>{`Player household net worth: ${formatMoney(
-                household.householdPlayerNetWorthGBP,
-                household.country
-              )}`}</Text>
-              <Text style={styles.testingText}>{`Other household net worth: ${formatMoney(
-                household.householdOtherNetWorthGBP,
-                household.country
-              )}`}</Text>
-              <Text>{scoreText("Reputation", household.reputation)}</Text>
-            </View>
-            <Pressable
-              onPress={() => setFamilyStatsVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </SectionCard>
-        ) : null}
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(familyVisible, setFamilyVisible)}
-          style={styles.box}
-        >
-          <Text>Family</Text>
-        </Pressable>
-
-        {familyVisible ? (
-          <SectionCard>
-            {familyMembers.map((character) => {
-              const relationshipLabel = getRelationshipLabel(
-                character,
-                currentCharacter,
-                household.characters
-              );
-
-              return (
-              <PersonCard
-                key={character.id}
-                expanded={selectedFamilyMemberId === character.id}
-                onPress={() =>
-                  setSelectedFamilyMemberId((current) =>
-                    current === character.id ? null : character.id
-                  )
-                }
-                title={
-                  relationshipLabel
-                    ? `${character.firstName} ${character.lastName} (${relationshipLabel})`
-                    : `${character.firstName} ${character.lastName}`
-                }
-              >
-                <View style={styles.detailGroup}>
-                  <Text>{`Age: ${getPersonAge(character, household.currentYear)}`}</Text>
-                  <Text>
-                    {scoreText(
-                      "Relationship",
-                      clamp(
-                        character.relationshipScores[household.currentCharacterId] ?? 0,
-                        -100,
-                        100
-                      )
-                    )}
-                  </Text>
-                  <Text>{scoreText("Appearance", character.appearance)}</Text>
-                  <Text>{scoreText("Intelligence", character.intelligence)}</Text>
-                  <Text>{`Traits: ${labelList(character.traits)}`}</Text>
-                  <Text>{`Job: ${character.job}`}</Text>
-                  <Text>{`Income: ${formatMoney(
-                    character.annualIncomeGBP,
-                    household.country
-                  )}`}</Text>
-                  <Text>{`Race: ${character.race}`}</Text>
-                  <Text style={styles.testingText}>
-                    {scoreText("Career Ceiling", character.careerCeiling)}
-                  </Text>
-                </View>
-                <Pressable
-                  onPress={() => switchLife(character.id)}
-                  style={styles.innerBox}
-                >
-                  <Text>Switch life</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setSelectedFamilyMemberId(null)}
-                  style={styles.innerBox}
-                >
-                  <Text>Close</Text>
-                </Pressable>
-              </PersonCard>
-              );
-            })}
-            <Pressable
-              onPress={() => {
-                setSelectedFamilyMemberId(null);
-                setFamilyVisible(false);
-              }}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </SectionCard>
-        ) : null}
-
-        <Pressable
-          onPress={() => {
-            closeAllPanels();
-            setCurrentScreen("romance");
-          }}
-          style={styles.box}
-        >
-          <Text>Romance</Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(friendsVisible, setFriendsVisible)}
-          style={styles.box}
-        >
-          <Text>Friends</Text>
-        </Pressable>
-
-        {friendsVisible ? (
-          <SectionCard>
-            {currentCharacter.friends.length > 0 ? (
-              currentCharacter.friends.map((friend) => (
-                <PersonCard
-                  key={friend.id}
-                  expanded={selectedFriendId === friend.id}
-                  onPress={() =>
-                    setSelectedFriendId((current) =>
-                      current === friend.id ? null : friend.id
-                    )
-                  }
-                  title={`${friend.firstName} ${friend.lastName}`}
-                >
-                  <StatBar
-                    items={[
-                      { label: "Relationship", value: friend.relationship },
-                      { label: "Compatibility", value: friend.compatibility },
-                      { label: "Appearance", value: friend.appearance },
-                      { label: "Intelligence", value: friend.intelligence },
-                    ]}
-                  />
-                  <Text>{`Age: ${friend.age}`}</Text>
-                  <Text>{`Race: ${friend.race}`}</Text>
-                  <Text>{`Traits: ${labelList(friend.traits)}`}</Text>
-                  <Text>{`Occupation: ${friend.occupation}`}</Text>
-                </PersonCard>
-              ))
-            ) : (
-              <Text>No friends yet.</Text>
-            )}
-            <Pressable
-              onPress={() => setFriendsVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </SectionCard>
-        ) : null}
-
-        <Pressable
-          onPress={() =>
-            toggleTopLevelPanel(financesVisible, setFinancesVisible)
-          }
-          style={styles.box}
-        >
-          <Text>Finances</Text>
-        </Pressable>
-
-        {financesVisible ? (
-          <View style={styles.box}>
-            <View style={styles.detailGroup}>
-              <Text>{`Annual Income: ${formatMoney(
-                currentTaxSummary.grossIncomeGBP,
-                household.country
-              )}`}</Text>
-              <Text>{`Tax Rate: ${currentTaxSummary.marginalRate}%`}</Text>
-              <Text>{`Tax Paid: ${formatMoney(
-                currentTaxSummary.taxGBP,
-                household.country
-              )}`}</Text>
-              <Text>{`Net Annual Income: ${formatMoney(
-                currentTaxSummary.netIncomeGBP,
-                household.country
-              )}`}</Text>
-            </View>
-            <Pressable
-              onPress={() => setFinancesVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(houseVisible, setHouseVisible)}
-          style={styles.box}
-        >
-          <Text>House</Text>
-        </Pressable>
-
-        {houseVisible ? (
-          <View style={styles.box}>
-            <View style={styles.detailGroup}>
-              <Text>{`Bedrooms: ${household.house.bedrooms}`}</Text>
-              <Text>{`Bathrooms: ${household.house.bathrooms}`}</Text>
-              <Text>{`House value: ${formatMoney(
-                household.house.valueGBP,
-                household.country
-              )}`}</Text>
-            </View>
-            <Pressable
-              onPress={() => setHouseResidentsVisible((value) => !value)}
-              style={styles.innerBox}
-            >
-              <Text>Who lives here</Text>
-            </Pressable>
-            {houseResidentsVisible ? (
-              <View style={styles.detailBox}>
-                {houseResidents.map((character) => {
-                  const relationshipLabel = getRelationshipLabel(
-                    character,
-                    currentCharacter,
-                    household.characters
-                  );
-
-                  return (
-                  <Text key={character.id}>
-                    {relationshipLabel
-                      ? `${character.firstName} ${character.lastName} (${relationshipLabel})`
-                      : `${character.firstName} ${character.lastName}`}
-                  </Text>
-                  );
-                })}
-                <Pressable
-                  onPress={() => setHouseResidentsVisible(false)}
-                  style={styles.innerBox}
-                >
-                  <Text>Close</Text>
-                </Pressable>
-              </View>
-            ) : null}
-            <Pressable
-              onPress={() => {
-                setHouseResidentsVisible(false);
-                setHouseVisible(false);
-              }}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        <Pressable
-          onPress={() =>
-            toggleTopLevelPanel(educationVisible, setEducationVisible)
-          }
-          style={styles.box}
-        >
-          <Text>Education</Text>
-        </Pressable>
-
-        <EducationPanel
-          classroomVisible={classroomVisible}
-          classmates={classmates}
-          country={household.country}
-          currentAcademicPerformance={currentAcademicPerformance}
-          currentCharacter={currentCharacter}
-          currentEducationStatus={currentEducationStatus}
-          degreeOptionsVisible={degreeOptionsVisible}
-          educationVisible={educationVisible}
-          onAddClassmateAsFriend={addClassmateAsFriend}
-          onChooseUniversityDegree={chooseUniversityDegree}
-          onClose={() => setEducationVisible(false)}
-          onCloseDegreeOptions={() => setDegreeOptionsVisible(false)}
-          onOpenClassroom={openClassroom}
-          onStudy={studyHarder}
-          onToggleDegreeOptions={() =>
-            setDegreeOptionsVisible((current) => !current)
-          }
-          onToggleSelectedClassmate={(classmateId) =>
-            setSelectedClassmateId((current) =>
-              current === classmateId ? null : classmateId
-            )
-          }
-          selectedClassmateId={selectedClassmateId}
-          shouldShowAcademicPerformance={shouldShowAcademicPerformance}
-        />
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(jobsVisible, setJobsVisible)}
-          style={styles.box}
-        >
-          <Text>Career</Text>
-        </Pressable>
-
-        <CareerPanel
-          country={household.country}
-          currentCVScore={currentCVScore}
-          currentCharacter={currentCharacter}
-          cvInfoVisible={cvInfoVisible}
-          fullTimeJobsVisible={fullTimeJobsVisible}
-          jobsVisible={jobsVisible}
-          lookForJobsVisible={lookForJobsVisible}
-          onApplyForFullTimeJob={applyForFullTimeJob}
-          onApplyForPartTimeJob={applyForPartTimeJob}
-          onChoosePartTimeHoursBand={choosePartTimeHoursBand}
-          onClose={() => setJobsVisible(false)}
-          onQuitFullTimeJob={quitFullTimeJob}
-          onQuitPartTimeJob={quitPartTimeJob}
-          onRefreshJobListings={refreshJobListings}
-          onToggleCvInfoVisible={() => setCvInfoVisible((value) => !value)}
-          onToggleFullTimeJobsVisible={() =>
-            setFullTimeJobsVisible((value) => !value)
-          }
-          onToggleLookForJobsVisible={() =>
-            setLookForJobsVisible((value) => !value)
-          }
-          onTogglePartTimeJobsVisible={() =>
-            setPartTimeJobsVisible((value) => !value)
-          }
-          partTimeJobsVisible={partTimeJobsVisible}
-          selectedPartTimeHoursBand={selectedPartTimeHoursBand}
-        />
-
-        <Pressable
-          onPress={() =>
-            toggleTopLevelPanel(activitiesVisible, setActivitiesVisible)
-          }
-          style={styles.box}
-        >
-          <Text>Activities</Text>
-        </Pressable>
-
-        {activitiesVisible ? (
-          <View style={styles.box}>
-            {ACTIVITY_DEFINITIONS.map((activity) => {
-              const isSelected = selectedActivityName === activity.name;
-              const isJoined = currentCharacter.joinedClubs.includes(activity.name);
-
-              return (
-                <View key={activity.name} style={styles.familyItem}>
-                  <Pressable
-                    onPress={() =>
-                      setSelectedActivityName((current) =>
-                        current === activity.name ? null : activity.name
-                      )
-                    }
-                    style={styles.innerBox}
-                  >
-                    <Text>{activity.name}</Text>
-                  </Pressable>
-
-                  {isSelected ? (
-                    <View style={styles.detailBox}>
-                      <Pressable
-                        onPress={() =>
-                          isJoined
-                            ? leaveActivityClub(activity.name)
-                            : joinActivityClub(activity.name)
-                        }
-                        style={styles.innerBox}
-                      >
-                        <Text>{isJoined ? "Leave club" : "Join club"}</Text>
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </View>
-              );
-            })}
-            <Pressable
-              onPress={() => {
-                setSelectedActivityName(null);
-                setActivitiesVisible(false);
-              }}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(diaryVisible, setDiaryVisible)}
-          style={styles.box}
-        >
-          <Text>Diary</Text>
-        </Pressable>
-
-        {diaryVisible ? (
-          <View style={styles.box}>
-            {currentDiaryEntries.length > 0 ? (
-              currentDiaryEntries.map((entry) => (
-                <View key={entry.id} style={styles.innerBox}>
-                  <Text>{entry.year}</Text>
-                  <Text>{entry.text}</Text>
-                </View>
-              ))
-            ) : (
-              <View style={styles.innerBox}>
-                <Text>No diary entries yet.</Text>
-              </View>
-            )}
-            <Pressable
-              onPress={() => setDiaryVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        <Pressable
-          onPress={() => toggleTopLevelPanel(memoriesVisible, setMemoriesVisible)}
-          style={styles.box}
-        >
-          <Text>Memories</Text>
-        </Pressable>
-
-        {memoriesVisible ? (
-          <View style={styles.box}>
-            {currentCharacter.memories.map((memory) => (
-              <View key={memory.id} style={styles.innerBox}>
-                <Text>{memory.text}</Text>
-              </View>
-            ))}
-            <Pressable
-              onPress={() => setMemoriesVisible(false)}
-              style={styles.innerBox}
-            >
-              <Text>Close</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        <View style={styles.tileGrid}>
+          <Pressable
+            onPress={() => openCategoryScreen("relationshipsHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Relationships</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => openCategoryScreen("assetsHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Assets</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => openCategoryScreen("educationCareerHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Education / Career</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => openCategoryScreen("activitiesHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Activities</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => openCategoryScreen("dynastyHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Dynasty</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => openCategoryScreen("settingsHub")}
+            style={styles.tileButton}
+          >
+            <Text variant="buttonText" style={styles.tileButtonText}>Settings</Text>
+          </Pressable>
+        </View>
       </ScrollView>
 
       <Pressable onPress={ageUpOneYear} style={styles.ageUpButton}>
-        <Text style={styles.ageUpButtonText}>Age Up</Text>
+        <Text variant="buttonText" style={styles.ageUpButtonText}>Age Up</Text>
       </Pressable>
 
       <View style={styles.versionBadge}>
-        <Text style={styles.versionText}>{`v${APP_VERSION}`}</Text>
+        <Text variant="caption" style={styles.versionText}>{`v${APP_VERSION}`}</Text>
       </View>
 
       <Pressable
@@ -4021,7 +5444,7 @@ function LoadedApp({
         }}
         style={styles.engineeringButton}
       >
-        <Text style={styles.engineeringButtonText}>Eng</Text>
+        <Text variant="buttonText" style={styles.engineeringButtonText}>Eng</Text>
       </Pressable>
 
       <Pressable
@@ -4031,21 +5454,21 @@ function LoadedApp({
         }}
         style={styles.testButton}
       >
-        <Text style={styles.testButtonText}>Test</Text>
+        <Text variant="buttonText" style={styles.testButtonText}>Test</Text>
       </Pressable>
 
       <Pressable
         onPress={() => toggleTopLevelPanel(ideasVisible, setIdeasVisible)}
         style={styles.ideasButton}
       >
-        <Text style={styles.ideasButtonText}>Ideas</Text>
+        <Text variant="buttonText" style={styles.ideasButtonText}>Ideas</Text>
       </Pressable>
 
       <Pressable
         onPress={() => toggleTopLevelPanel(tbcVisible, setTbcVisible)}
         style={styles.tbcButton}
       >
-        <Text style={styles.tbcButtonText}>TBC</Text>
+        <Text variant="buttonText" style={styles.tbcButtonText}>TBC</Text>
       </Pressable>
 
       {tbcVisible ? (
@@ -4090,7 +5513,7 @@ const styles = StyleSheet.create({
   container: {
     padding: 12,
     gap: 8,
-    alignItems: "flex-start",
+    alignItems: "stretch",
   },
   loadingContainer: {
     flex: 1,
@@ -4106,6 +5529,107 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 8,
     alignSelf: "stretch",
+  },
+  assetsHousingButton: {
+    padding: 12,
+    alignSelf: "stretch",
+    backgroundColor: "#f3f3f4",
+  },
+  assetsBrowsePropertiesButton: {
+    padding: 12,
+    alignSelf: "stretch",
+    backgroundColor: "#f3f3f4",
+  },
+  topBar: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+    alignSelf: "stretch",
+  },
+  profileButton: {
+    width: "60%",
+    padding: 12,
+    minHeight: 84,
+    justifyContent: "center",
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+  },
+  profileButtonExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  profileButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  profileButtonNameGroup: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  profileButtonTitle: {
+    fontSize: 20,
+    lineHeight: 26,
+  },
+  ageYearBox: {
+    minWidth: 120,
+    padding: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+  },
+  ageYearSeasonGroup: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  ageYearSeasonIcon: {
+    width: 28,
+    height: 28,
+  },
+  ageYearSeasonText: {
+    textAlign: "center",
+  },
+  ageYearInfoGroup: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    gap: 4,
+  },
+  ageYearAgeText: {
+    fontSize: 18,
+    lineHeight: 24,
+  },
+  ageYearText: {
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  metaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    alignSelf: "stretch",
+    gap: 12,
+  },
+  tileGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    alignSelf: "stretch",
+    gap: 8,
+  },
+  tileButton: {
+    width: "31%",
+    aspectRatio: 1,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 12,
+  },
+  tileButtonText: {
+    textAlign: "center",
   },
   innerBox: {
     borderWidth: 1,
@@ -4123,6 +5647,175 @@ const styles = StyleSheet.create({
   },
   detailGroup: {
     gap: 8,
+  },
+  houseCardContainer: {
+    marginTop: 8,
+  },
+  houseCard: {
+    padding: 12,
+    backgroundColor: "#f3f3f4",
+    gap: 8,
+  },
+  houseCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  houseDetailBox: {
+    padding: 12,
+    gap: 8,
+    marginTop: -8,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    paddingTop: 14,
+  },
+  browseActionCard: {
+    padding: 12,
+    backgroundColor: "#f3f3f4",
+    alignSelf: "stretch",
+  },
+  tbcActionText: {
+    color: "#b42318",
+  },
+  propertyListingCard: {
+    borderWidth: 1,
+    padding: 12,
+    gap: 8,
+    backgroundColor: "#ffffff",
+  },
+  propertyListingPlaceholder: {
+    width: "100%",
+    aspectRatio: 1.25,
+    borderWidth: 1,
+    backgroundColor: "#f3f3f4",
+  },
+  partnerCardContainer: {
+    marginTop: 8,
+  },
+  partnerCard: {
+    padding: 8,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+    gap: 10,
+  },
+  partnerCardExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  partnerDetailBox: {
+    padding: 12,
+    gap: 8,
+    marginTop: -8,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    paddingTop: 14,
+  },
+  partnerEngineeringButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    zIndex: 1,
+  },
+  partnerActionsButton: {
+    marginTop: 8,
+    alignSelf: "stretch",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#b8bcc4",
+  },
+  partnerActionsButtonExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  partnerActionsButtonText: {
+    fontSize: 15,
+    lineHeight: 19,
+  },
+  partnerActionsMenu: {
+    padding: 12,
+    gap: 8,
+    marginTop: -1,
+    backgroundColor: "#f3f3f4",
+    borderWidth: 1,
+    borderColor: "#b8bcc4",
+    borderTopWidth: 0,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+  },
+  partnerMenuActionButton: {
+    alignSelf: "stretch",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#f3f3f4",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#b8bcc4",
+  },
+  partnerSubmenu: {
+    gap: 8,
+    paddingLeft: 12,
+  },
+  playerDetailsCard: {
+    backgroundColor: "#f3f3f4",
+    borderRadius: 18,
+    borderWidth: 0,
+    borderTopLeftRadius: 0,
+    marginTop: 8,
+    paddingTop: 14,
+  },
+  profileDetailHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  profileHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  profileStatLine: {
+    flex: 1,
+  },
+  familyDetailHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  familyRelationshipBarWrap: {
+    flex: 1,
+  },
+  familyEngineeringButton: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    zIndex: 1,
+  },
+  familyInfoLabel: {
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  profileInfoLabel: {
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  profileInfoValue: {
+    fontSize: 16,
+    lineHeight: 22,
   },
   jobsHeaderRow: {
     flexDirection: "row",
@@ -4182,7 +5875,6 @@ const styles = StyleSheet.create({
   },
   screenTitle: {
     fontSize: 24,
-    fontWeight: "600",
   },
   progressRow: {
     flexDirection: "row",
@@ -4195,15 +5887,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   progressStepActive: {
-    fontWeight: "700",
   },
   sectionTitle: {
     fontSize: 22,
-    fontWeight: "600",
   },
   fieldSectionTitle: {
     fontSize: 18,
-    fontWeight: "600",
   },
   profileIconBox: {
     alignSelf: "center",
@@ -4212,6 +5901,47 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  playerProfilePhotoFrame: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#f3f3f4",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    flexShrink: 0,
+  },
+  playerProfilePhotoPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#f3f3f4",
+    flexShrink: 0,
+  },
+  playerProfilePhoto: {
+    width: 48,
+    height: 48,
+  },
+  profilePhotoFrame: {
+    alignSelf: "center",
+    width: 120,
+    height: 120,
+    borderRadius: 28,
+    backgroundColor: "#f3f3f4",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  profilePhotoPlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 28,
+    backgroundColor: "#f3f3f4",
+  },
+  profilePhoto: {
+    width: 120,
+    height: 120,
   },
   profileIconHead: {
     width: 44,
@@ -4391,7 +6121,6 @@ const styles = StyleSheet.create({
   },
   engineeringTitle: {
     fontSize: 24,
-    fontWeight: "600",
   },
   engineeringTabRow: {
     flexDirection: "row",

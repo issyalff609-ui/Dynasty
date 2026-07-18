@@ -1,6 +1,7 @@
 import React from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
 import type { ImageStyle, StyleProp, TextStyle, ViewStyle } from "react-native";
+import { AppText as Text } from "../../components/AppText";
 
 export type DatingScreenStyles = Record<
   string,
@@ -56,6 +57,7 @@ export function DatingBottomNavigation({
           ]}
         >
           <Text
+            variant="buttonText"
             style={
               currentSection === item.key
                 ? styles.datingBottomNavigationTextActive
